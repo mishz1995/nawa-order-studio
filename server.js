@@ -1,0 +1,454 @@
+require('dotenv').config();
+const express = require('express');
+const session = require('express-session');
+const FileStore = require('session-file-store')(session);
+const QRCode = require('qrcode');
+const webPush = require('web-push');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const app = express();
+const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
+const dbFile = path.join(dataDir, 'nawa.enc');
+fs.mkdirSync(dataDir, { recursive: true });
+if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) throw new Error('Set SESSION_SECRET to at least 32 random characters.');
+if (!process.env.BOOTSTRAP_ADMIN_USERNAME || !process.env.BOOTSTRAP_ADMIN_PASSWORD || process.env.BOOTSTRAP_ADMIN_PASSWORD.length < 12) throw new Error('Set BOOTSTRAP_ADMIN_USERNAME and a 12+ character BOOTSTRAP_ADMIN_PASSWORD.');
+
+const deriveKey = () => Buffer.from(crypto.hkdfSync('sha256', process.env.SESSION_SECRET, '', 'nawa-store-v1', 32));
+function decodeDb(encoded) {
+  const [version, ivHex, tagHex, body] = encoded.split(':');
+  if (version !== 'nawa1' || !body) throw new Error('The local database has an unknown format.');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', deriveKey(), Buffer.from(ivHex, 'hex'));
+  decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(body, 'base64')), decipher.final()]).toString('utf8'));
+}
+function readDb() { return fs.existsSync(dbFile) ? decodeDb(fs.readFileSync(dbFile, 'utf8')) : { users: [], shops: [], orders: [] }; }
+let db = readDb();
+const redisUrl = (process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/$/, '');
+const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || '';
+if (Boolean(redisUrl) !== Boolean(redisToken)) throw new Error('Set both Upstash REST URL and token, or leave both unset.');
+if (process.env.NODE_ENV === 'production' && !redisUrl) throw new Error('Production requires persistent encrypted storage. Configure Upstash REST credentials.');
+if (redisUrl && new URL(redisUrl).protocol !== 'https:') throw new Error('Upstash REST storage must use HTTPS.');
+if (process.env.NODE_ENV === 'production' && process.env.BASE_URL && new URL(process.env.BASE_URL).protocol !== 'https:') throw new Error('BASE_URL must use HTTPS in production.');
+let persistQueue = Promise.resolve();
+function encryptDb() {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', deriveKey(), iv);
+  const payload = Buffer.concat([cipher.update(JSON.stringify(db), 'utf8'), cipher.final()]);
+  return ['nawa1', iv.toString('hex'), cipher.getAuthTag().toString('hex'), payload.toString('base64')].join(':');
+}
+async function upstashCommand(command, args=[], body) {
+  const url = `${redisUrl}/${command.toLowerCase()}/${args.map((arg) => encodeURIComponent(arg)).join('/')}`;
+  const response = await fetch(url, { method: body === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${redisToken}`, ...(body === undefined ? {} : { 'Content-Type': 'text/plain' }) }, body });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result.error) throw new Error(`Cloud storage ${command} failed (${response.status})`);
+  return result.result;
+}
+async function loadRemoteDb() {
+  if (!redisUrl) return null;
+  const encoded = await upstashCommand('GET', ['nawa:state']);
+  return encoded ? decodeDb(encoded) : null;
+}
+async function saveDb() {
+  const encoded = encryptDb();
+  const temp = dbFile + '.tmp';
+  fs.writeFileSync(temp, encoded, { mode: 0o600 });
+  fs.renameSync(temp, dbFile);
+  if (!redisUrl) return;
+  const persist = persistQueue.then(() => upstashCommand('SET', ['nawa:state'], encoded));
+  persistQueue = persist.catch(() => {});
+  return persist;
+}
+const sessionKey = Buffer.from(crypto.hkdfSync('sha256', process.env.SESSION_SECRET, '', 'nawa-session-v1', 32));
+function encryptSession(sessionData) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', sessionKey, iv);
+  const body = Buffer.concat([cipher.update(JSON.stringify(sessionData), 'utf8'), cipher.final()]);
+  return [iv.toString('hex'), cipher.getAuthTag().toString('hex'), body.toString('base64')].join(':');
+}
+function decryptSession(encoded) {
+  const [ivHex, tagHex, body] = encoded.split(':');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', sessionKey, Buffer.from(ivHex, 'hex'));
+  decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(body, 'base64')), decipher.final()]).toString('utf8'));
+}
+class EncryptedUpstashSessionStore extends session.Store {
+  get(sid, callback) {
+    upstashCommand('GET', [`nawa:session:${sid}`]).then((value) => callback(null, value ? decryptSession(value) : null)).catch(callback);
+  }
+  set(sid, sessionData, callback) {
+    const expiresAt = sessionData.cookie?.expires ? new Date(sessionData.cookie.expires).getTime() : Date.now() + 8 * 60 * 60 * 1000;
+    const ttl = Math.max(1, Math.ceil((expiresAt - Date.now()) / 1000));
+    const key = `nawa:session:${sid}`;
+    const value = encryptSession(sessionData);
+    fetch(`${redisUrl}/set/${encodeURIComponent(key)}?EX=${ttl}`, { method: 'POST', headers: { Authorization: `Bearer ${redisToken}`, 'Content-Type': 'text/plain' }, body: value })
+      .then(async (response) => { const result = await response.json().catch(() => ({})); if (!response.ok || result.error) throw new Error('Session storage write failed'); callback(null); })
+      .catch(callback);
+  }
+  destroy(sid, callback) { upstashCommand('DEL', [`nawa:session:${sid}`]).then(() => callback(null)).catch(callback); }
+  touch(sid, sessionData, callback) { this.set(sid, sessionData, callback); }
+}
+const hashPassword = (password) => {
+  const salt = crypto.randomBytes(16);
+  return `scrypt$${salt.toString('hex')}$${crypto.scryptSync(password, salt, 64).toString('hex')}`;
+};
+const verifyPassword = (password, stored) => {
+  if (!stored?.startsWith('scrypt$')) return false;
+  const [, saltHex, expectedHex] = stored.split('$');
+  const expected = Buffer.from(expectedHex, 'hex');
+  const actual = crypto.scryptSync(password, Buffer.from(saltHex, 'hex'), 64);
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+};
+function normalizeAndSeedDb() {
+  let changed = false;
+  if (!db.settings || typeof db.settings !== 'object') { db.settings = { appName: 'نوى' }; changed = true; }
+  if (typeof db.settings.appName !== 'string' || !db.settings.appName.trim()) { db.settings.appName = 'نوى'; changed = true; }
+  for (const shop of db.shops) {
+    if (!['catalog', 'custom'].includes(shop.orderMode)) { shop.orderMode = 'catalog'; changed = true; }
+    if (!Array.isArray(shop.items)) {
+      shop.items = [
+        { id: crypto.randomUUID(), name: 'لاتيه بارد', category: 'قهوة', prepMinutes: 4, active: true },
+        { id: crypto.randomUUID(), name: 'كابتشينو', category: 'قهوة', prepMinutes: 5, active: true },
+        { id: crypto.randomUUID(), name: 'فلات وايت', category: 'قهوة', prepMinutes: 4, active: true },
+        { id: crypto.randomUUID(), name: 'كرواسون زبدة', category: 'مخبوزات', prepMinutes: 3, active: true },
+        { id: crypto.randomUUID(), name: 'تشيزكيك', category: 'حلويات', prepMinutes: 2, active: true },
+        { id: crypto.randomUUID(), name: 'ماتشا لاتيه', category: 'مشروبات باردة', prepMinutes: 6, active: true }
+      ];
+      changed = true;
+    }
+  }
+  if (!db.users.some((user) => user.role === 'admin')) {
+    db.users.push({ id: crypto.randomUUID(), username: process.env.BOOTSTRAP_ADMIN_USERNAME, passwordHash: hashPassword(process.env.BOOTSTRAP_ADMIN_PASSWORD), role: 'admin' });
+    changed = true;
+  }
+  return changed;
+}
+
+const vapidPublicKey = process.env.VAPID_PUBLIC_KEY || '';
+const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY || '';
+const vapidSubject = process.env.VAPID_SUBJECT || '';
+const pushReady = Boolean(vapidPublicKey && vapidPrivateKey && /^(mailto:|https:\/\/)/.test(vapidSubject));
+if (pushReady) webPush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
+const appBaseUrl = () => (process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
+
+app.disable('x-powered-by');
+app.set('trust proxy', process.env.NODE_ENV === 'production' ? 1 : false);
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+  if (process.env.NODE_ENV === 'production') {
+    if (req.secure || req.get('x-forwarded-proto') === 'https') res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
+  }
+  if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.get('origin') && req.get('origin') !== `${req.protocol}://${req.get('host')}`) return res.status(403).json({ error: 'مصدر الطلب غير صالح' });
+  next();
+});
+app.use(express.json({ limit: '20kb' }));
+const sessionOptions = {
+  name: 'nawa.sid',
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 8 * 60 * 60 * 1000 }
+};
+if (redisUrl) sessionOptions.store = new EncryptedUpstashSessionStore();
+else if (process.env.NODE_ENV !== 'production') sessionOptions.store = new FileStore({ path: path.join(dataDir, '.sessions'), retries: 0, logFn: () => {} });
+app.use(session(sessionOptions));
+app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
+
+const attempts = new Map();
+const pruneAttempts = setInterval(() => { const now = Date.now(); for (const [key, bucket] of attempts) if (bucket.until < now) attempts.delete(key); }, 60_000);
+pruneAttempts.unref();
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const key = `${req.ip}:${req.path}`;
+  const now = Date.now();
+  let bucket = attempts.get(key);
+  if (!bucket || bucket.until < now) bucket = { count: 0, until: now + (req.path === '/auth/login' ? 15 * 60_000 : 60_000) };
+  if (++bucket.count > (req.path === '/auth/login' ? 10 : 180)) return res.status(429).json({ error: 'محاولات كثيرة، حاول لاحقاً' });
+  attempts.set(key, bucket);
+  next();
+});
+const safeShop = (shop) => ({ id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, createdAt: shop.createdAt });
+const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, bannerText: shop.bannerText });
+const sanitizeItem = (item) => ({ id: item.id, name: item.name, category: item.category, prepMinutes: item.prepMinutes, active: item.active !== false });
+const safeOrder = (order) => { const { pushSubscriptions, ...visible } = order; return visible; };
+async function manageShopItems(shop, req, res) {
+  const items = shop.items || (shop.items = []);
+  if (req.method === 'GET') return res.json({ items: items.map(sanitizeItem) });
+  if (req.method === 'POST') {
+    const name = cleanText(req.body?.name, 70);
+    const category = cleanText(req.body?.category, 35) || 'أخرى';
+    const prepMinutes = Number(req.body?.prepMinutes);
+    if (name.length < 2 || !Number.isInteger(prepMinutes) || prepMinutes < 1 || prepMinutes > 180) return res.status(400).json({ error: 'أدخل اسم الصنف ومدة تحضير من 1 إلى 180 دقيقة' });
+    const item = { id: crypto.randomUUID(), name, category, prepMinutes, active: true };
+    items.push(item); await saveDb(); return res.status(201).json({ item: sanitizeItem(item) });
+  }
+  const item = items.find((entry) => entry.id === req.params.itemId);
+  if (!item) return res.status(404).json({ error: 'الصنف غير موجود' });
+  if (req.method === 'PATCH') {
+    if (req.body?.name !== undefined) { const name = cleanText(req.body.name, 70); if (name.length < 2) return res.status(400).json({ error: 'اسم الصنف قصير' }); item.name = name; }
+    if (req.body?.category !== undefined) item.category = cleanText(req.body.category, 35) || 'أخرى';
+    if (req.body?.prepMinutes !== undefined) { const time = Number(req.body.prepMinutes); if (!Number.isInteger(time) || time < 1 || time > 180) return res.status(400).json({ error: 'مدة التحضير يجب أن تكون من 1 إلى 180 دقيقة' }); item.prepMinutes = time; }
+    if (req.body?.active !== undefined) item.active = !!req.body.active;
+    await saveDb(); return res.json({ item: sanitizeItem(item) });
+  }
+  shop.items = items.filter((entry) => entry.id !== item.id); await saveDb(); return res.json({ ok: true });
+}
+const requireLogin = (req, res, next) => req.session.user ? next() : res.status(401).json({ error: 'سجّل الدخول أولاً' });
+const requireAdmin = (req, res, next) => req.session.user?.role === 'admin' ? next() : res.status(403).json({ error: 'هذه الصلاحية للأدمن فقط' });
+const requireShop = (req, res, next) => {
+  if (!req.session.user || req.session.user.role !== 'shop') return res.status(403).json({ error: 'هذه الصفحة خاصة بالمتجر' });
+  const shop = db.shops.find((item) => item.id === req.session.user.shopId && item.active);
+  if (!shop) return res.status(403).json({ error: 'المتجر غير متاح' });
+  req.shop = shop;
+  next();
+};
+const cleanText = (value, max) => String(value || '').replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, max);
+const googleUrl = (value) => {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    return url.protocol === 'https:' && (host === 'google.com' || host.endsWith('.google.com') || host === 'g.page' || host === 'goo.gl' || host.endsWith('.goo.gl')) ? url.toString() : null;
+  } catch { return null; }
+};
+const themes = ['studio', 'court', 'matcha'];
+const statuses = ['queued', 'preparing', 'ready', 'completed'];
+const statusLabels = { queued: 'استلمنا طلبك', preparing: 'جاري التحضير', ready: 'جاهز للاستلام', completed: 'تم التسليم' };
+
+app.post('/api/auth/login', (req, res) => {
+  const username = cleanText(req.body?.username, 40);
+  const password = typeof req.body?.password === 'string' ? req.body.password.slice(0, 128) : '';
+  const admin = db.users.find((user) => user.role === 'admin' && user.username === username);
+  const shop = db.shops.find((item) => item.username === username && item.active);
+  const account = admin || (shop ? { ...shop, role: 'shop', shopId: shop.id } : null);
+  if (!account || !verifyPassword(password, account.passwordHash)) return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+  req.session.regenerate((err) => {
+    if (err) return res.status(500).json({ error: 'تعذر بدء الجلسة' });
+    req.session.user = account.role === 'admin' ? { id: account.id, username: account.username, role: 'admin' } : { id: account.id, username: account.username, role: 'shop', shopId: account.shopId, name: account.name, slug: account.slug, theme: account.theme, bannerText: account.bannerText };
+    res.json({ user: req.session.user });
+  });
+});
+app.post('/api/auth/logout', requireLogin, (req, res) => req.session.destroy(() => res.json({ ok: true })));
+app.get('/api/auth/me', (req, res) => res.json({ user: req.session.user || null }));
+app.get('/healthz', (req, res) => res.json({ ok: true }));
+app.get('/api/public/settings', (req, res) => res.json({ settings: { appName: db.settings.appName || 'نوى' } }));
+app.get('/api/public/manifest.webmanifest', (req, res) => {
+  const appName = db.settings.appName || 'نوى';
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('application/manifest+json').json({ id: '/', name: appName, short_name: appName.slice(0, 12), lang: 'ar', dir: 'rtl', start_url: '/', scope: '/', display: 'standalone', background_color: '#f6f6f3', theme_color: '#171914', icons: [{ src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }] });
+});
+
+app.get('/api/admin/shops', requireLogin, requireAdmin, (req, res) => res.json({ shops: db.shops.map(safeShop) }));
+app.get('/api/admin/settings', requireLogin, requireAdmin, (req, res) => res.json({ settings: { appName: db.settings.appName || 'نوى' } }));
+app.patch('/api/admin/settings', requireLogin, requireAdmin, async (req, res) => {
+  const appName = cleanText(req.body?.appName, 40);
+  if (appName.length < 2) return res.status(400).json({ error: 'اسم الموقع يجب أن يكون حرفين على الأقل' });
+  db.settings.appName = appName;
+  await saveDb();
+  res.json({ settings: { appName } });
+});
+app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
+  const name = cleanText(req.body?.name, 70);
+  const username = cleanText(req.body?.username, 40);
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  const reviewUrl = req.body?.reviewUrl ? googleUrl(req.body.reviewUrl) : '';
+  const theme = themes.includes(req.body?.theme) ? req.body.theme : 'studio';
+  const orderMode = ['catalog','custom'].includes(req.body?.orderMode) ? req.body.orderMode : 'catalog';
+  if (name.length < 2 || !/^[A-Za-z0-9_.-]{3,40}$/.test(username) || password.length < 12 || password.length > 128) return res.status(400).json({ error: 'تحقق من الاسم واسم المستخدم وكلمة المرور (12 خانة على الأقل)' });
+  if (db.shops.some((s) => s.username === username) || db.users.some((u) => u.username === username)) return res.status(409).json({ error: 'اسم المستخدم مستخدم من قبل' });
+  if (req.body?.reviewUrl && !reviewUrl) return res.status(400).json({ error: 'أدخل رابط Google Maps آمن يبدأ بـ HTTPS' });
+  const slug = `${username.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-${crypto.randomBytes(2).toString('hex')}`;
+  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', createdAt: new Date().toISOString() };
+  db.shops.push(shop); await saveDb(); res.status(201).json({ shop: safeShop(shop) });
+});
+app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) => {
+  const shop = db.shops.find((s) => s.id === req.params.id);
+  if (!shop) return res.status(404).json({ error: 'المتجر غير موجود' });
+  if (req.body?.username !== undefined) {
+    const username = cleanText(req.body.username, 40);
+    if (!/^[A-Za-z0-9_.-]{3,40}$/.test(username)) return res.status(400).json({ error: 'اسم مستخدم المتجر غير صالح' });
+    if (db.shops.some((entry) => entry.id !== shop.id && entry.username === username) || db.users.some((entry) => entry.username === username)) return res.status(409).json({ error: 'اسم المستخدم مستخدم من قبل' });
+    shop.username = username;
+  }
+  if (req.body?.password) {
+    if (typeof req.body.password !== 'string' || req.body.password.length < 12 || req.body.password.length > 128) return res.status(400).json({ error: 'كلمة المرور الجديدة يجب أن تكون من 12 إلى 128 خانة' });
+    shop.passwordHash = hashPassword(req.body.password);
+  }
+  if (req.body?.name !== undefined) shop.name = cleanText(req.body.name, 70) || shop.name;
+  if (req.body?.reviewUrl !== undefined) {
+    const url = req.body.reviewUrl === '' ? '' : googleUrl(req.body.reviewUrl);
+    if (req.body.reviewUrl && !url) return res.status(400).json({ error: 'أدخل رابط Google Maps آمن يبدأ بـ HTTPS' });
+    shop.reviewUrl = url;
+  }
+  if (req.body?.theme !== undefined && themes.includes(req.body.theme)) shop.theme = req.body.theme;
+  if (req.body?.orderMode !== undefined && ['catalog','custom'].includes(req.body.orderMode)) shop.orderMode = req.body.orderMode;
+  if (req.body?.bannerText !== undefined) shop.bannerText = cleanText(req.body.bannerText, 90);
+  if (req.body?.active !== undefined) shop.active = !!req.body.active;
+  await saveDb(); res.json({ shop: safeShop(shop) });
+});
+app.delete('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) => {
+  db.shops = db.shops.filter((s) => s.id !== req.params.id);
+  db.orders = db.orders.filter((o) => o.shopId !== req.params.id);
+  await saveDb(); res.json({ ok: true });
+});
+app.get('/api/admin/shops/:id/items', requireLogin, requireAdmin, (req, res) => {
+  const shop = db.shops.find((s) => s.id === req.params.id);
+  return shop ? res.json({ items: (shop.items || []).map(sanitizeItem) }) : res.status(404).json({ error: 'المتجر غير موجود' });
+});
+app.post('/api/admin/shops/:id/items', requireLogin, requireAdmin, (req, res) => {
+  const shop = db.shops.find((s) => s.id === req.params.id);
+  return shop ? manageShopItems(shop, req, res) : res.status(404).json({ error: 'المتجر غير موجود' });
+});
+app.patch('/api/admin/shops/:id/items/:itemId', requireLogin, requireAdmin, (req, res) => {
+  const shop = db.shops.find((s) => s.id === req.params.id);
+  return shop ? manageShopItems(shop, req, res) : res.status(404).json({ error: 'المتجر غير موجود' });
+});
+app.delete('/api/admin/shops/:id/items/:itemId', requireLogin, requireAdmin, (req, res) => {
+  const shop = db.shops.find((s) => s.id === req.params.id);
+  return shop ? manageShopItems(shop, req, res) : res.status(404).json({ error: 'المتجر غير موجود' });
+});
+
+app.get('/api/shop/orders', requireLogin, requireShop, (req, res) => res.json({ orders: db.orders.filter((o) => o.shopId === req.shop.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(safeOrder) }));
+app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText } }));
+async function createOrderForShop(shop, body, res) {
+  const customerName = cleanText(body?.customerName, 60);
+  let item = '', items = [], prepMinutes = 0;
+  if (shop.orderMode === 'custom') {
+    item = cleanText(body?.item, 180);
+    if (customerName.length < 2 || item.length < 2) return res.status(400).json({ error: 'أدخل اسم العميل وتفاصيل الطلب' });
+  } else {
+    const selections = Array.isArray(body?.items) ? body.items : [];
+    if (!customerName || customerName.length < 2 || selections.length < 1 || selections.length > 20) return res.status(400).json({ error: 'أدخل اسم العميل واختر صنفًا واحدًا على الأقل' });
+    const quantities = new Map();
+    for (const selection of selections) {
+      if (typeof selection?.id !== 'string' || !Number.isInteger(Number(selection.quantity)) || Number(selection.quantity) < 1 || Number(selection.quantity) > 20) return res.status(400).json({ error: 'تحقق من الأصناف والكميات' });
+      quantities.set(selection.id, (quantities.get(selection.id) || 0) + Number(selection.quantity));
+    }
+    items = [...quantities].map(([id, quantity]) => {
+      const entry = (shop.items || []).find((candidate) => candidate.id === id && candidate.active !== false);
+      return entry ? { id: entry.id, name: entry.name, category: entry.category, prepMinutes: entry.prepMinutes, quantity } : null;
+    });
+    if (items.some((entry) => !entry)) return res.status(400).json({ error: 'أحد الأصناف لم يعد متاحًا، حدّث القائمة وحاول مجددًا' });
+    prepMinutes = Math.min(180, items.reduce((sum, entry) => sum + entry.prepMinutes * entry.quantity, 0));
+    item = items.map((entry) => `${entry.name} × ${entry.quantity}`).join('، ');
+  }
+  const order = { id: crypto.randomBytes(12).toString('hex'), shopId: shop.id, number: String(1000 + crypto.randomInt(9000)), customerName, item, items, prepMinutes, pushSubscriptions: [], status: 'queued', scanned: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  db.orders.push(order); db.orders = db.orders.slice(-500); await saveDb();
+  res.status(201).json({ order: safeOrder(order) });
+}
+app.post('/api/shop/orders', requireLogin, requireShop, async (req, res) => createOrderForShop(req.shop, req.body, res));
+app.post('/api/admin/shops/:id/orders', requireLogin, requireAdmin, async (req, res) => {
+  const shop = db.shops.find((entry) => entry.id === req.params.id && entry.active);
+  return shop ? createOrderForShop(shop, req.body, res) : res.status(404).json({ error: 'المتجر غير متاح' });
+});
+app.get('/api/admin/shops/:id/orders', requireLogin, requireAdmin, (req, res) => {
+  const shop = db.shops.find((entry) => entry.id === req.params.id);
+  return shop ? res.json({ orders: db.orders.filter((order) => order.shopId === shop.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(safeOrder) }) : res.status(404).json({ error: 'المتجر غير موجود' });
+});
+app.delete('/api/shop/orders/completed', requireLogin, requireShop, async (req, res) => {
+  const before = db.orders.length;
+  db.orders = db.orders.filter((order) => order.shopId !== req.shop.id || order.status !== 'completed');
+  const cleared = before - db.orders.length;
+  if (cleared) await saveDb();
+  res.json({ ok: true, cleared });
+});
+async function sendReadyPush(order, shop) {
+  if (!pushReady || !order.pushSubscriptions?.length) return;
+  const message = JSON.stringify({ title: `${shop.name} — طلبك جاهز`, body: `الطلب #${order.number} جاهز للاستلام`, url: `${appBaseUrl()}/order/${order.id}`, tag: `order-${order.id}` });
+  const results = await Promise.allSettled(order.pushSubscriptions.map((subscription) => webPush.sendNotification(subscription, message, { TTL: 300, urgency: 'high', timeout: 8000 })));
+  const expired = new Set(results.flatMap((result, i) => result.status === 'rejected' && [404, 410].includes(result.reason?.statusCode) ? [order.pushSubscriptions[i].endpoint] : []));
+  if (expired.size) { order.pushSubscriptions = order.pushSubscriptions.filter((sub) => !expired.has(sub.endpoint)); await saveDb(); }
+}
+async function updateOrderStatus(order, status, shop, res) {
+  if (!order || !statuses.includes(status)) return res.status(400).json({ error: 'تعذر تحديث الطلب' });
+  const wasReady = order.status === 'ready';
+  order.status = status; order.updatedAt = new Date().toISOString(); await saveDb();
+  if (order.status === 'ready' && !wasReady) return sendReadyPush(order, shop).then(() => res.json({ order: safeOrder(order), pushConfigured: pushReady }));
+  return res.json({ order: safeOrder(order), pushConfigured: pushReady });
+}
+app.patch('/api/shop/orders/:id', requireLogin, requireShop, async (req, res) => {
+  const order = db.orders.find((o) => o.id === req.params.id && o.shopId === req.shop.id);
+  return updateOrderStatus(order, req.body?.status, req.shop, res);
+});
+app.patch('/api/admin/shops/:id/orders/:orderId', requireLogin, requireAdmin, async (req, res) => {
+  const shop = db.shops.find((entry) => entry.id === req.params.id);
+  const order = db.orders.find((entry) => entry.id === req.params.orderId && entry.shopId === req.params.id);
+  if (!shop || !order) return res.status(404).json({ error: 'الطلب غير موجود' });
+  return updateOrderStatus(order, req.body?.status, shop, res);
+});
+app.delete('/api/admin/shops/:id/orders/completed', requireLogin, requireAdmin, async (req, res) => {
+  const shop = db.shops.find((entry) => entry.id === req.params.id);
+  if (!shop) return res.status(404).json({ error: 'المتجر غير موجود' });
+  const before = db.orders.length;
+  db.orders = db.orders.filter((order) => order.shopId !== shop.id || order.status !== 'completed');
+  const cleared = before - db.orders.length;
+  if (cleared) await saveDb();
+  res.json({ ok: true, cleared });
+});
+app.get('/api/shop/items', requireLogin, requireShop, (req, res) => manageShopItems(req.shop, req, res));
+app.post('/api/shop/items', requireLogin, requireShop, (req, res) => manageShopItems(req.shop, req, res));
+app.patch('/api/shop/items/:itemId', requireLogin, requireShop, (req, res) => manageShopItems(req.shop, req, res));
+app.delete('/api/shop/items/:itemId', requireLogin, requireShop, (req, res) => manageShopItems(req.shop, req, res));
+app.patch('/api/shop/settings', requireLogin, requireShop, async (req, res) => {
+  if (themes.includes(req.body?.theme)) req.shop.theme = req.body.theme;
+  if (req.body?.bannerText !== undefined) req.shop.bannerText = cleanText(req.body.bannerText, 90);
+  await saveDb(); res.json({ shop: safeShop(req.shop) });
+});
+
+app.get('/api/public/push-key', (req, res) => res.json({ key: pushReady ? vapidPublicKey : '' }));
+app.get('/api/public/orders/:id', async (req, res) => {
+  const order = db.orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: 'الطلب غير موجود' });
+  if (!order.scanned) return res.status(403).json({ error: 'امسح رمز الطلب المعروض على شاشة المتجر لعرض بطاقة الحالة' });
+  const shop = db.shops.find((s) => s.id === order.shopId);
+  res.json({ order: { id: order.id, number: order.number, customerName: order.customerName || '', item: order.item, items: order.items || [], prepMinutes: order.prepMinutes || 0, status: order.status, statusLabel: statusLabels[order.status], updatedAt: order.updatedAt }, shop: { name: shop?.name || '', reviewUrl: order.status === 'completed' ? shop?.reviewUrl || '' : '', theme: shop?.theme || 'studio' } });
+});
+app.get('/scan/:id', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const order = db.orders.find((o) => o.id === req.params.id);
+  if (!order) return res.status(404).send('الطلب غير موجود');
+  const shop = db.shops.find((s) => s.id === order.shopId);
+  order.scanned = true;
+  if (shop) shop.screenBannerUntil = Date.now() + 4500;
+  await saveDb();
+  res.redirect(302, `/order/${encodeURIComponent(order.id)}`);
+});
+app.post('/api/public/orders/:id/push', async (req, res) => {
+  const order = db.orders.find((o) => o.id === req.params.id);
+  if (!order || !order.scanned) return res.status(403).json({ error: 'امسح رمز الطلب أولاً' });
+  const sub = req.body?.subscription;
+  if (!pushReady) return res.status(503).json({ error: 'إشعارات الويب غير مهيأة على الخادم بعد' });
+  let endpoint;
+  try { endpoint = new URL(sub?.endpoint); } catch {}
+  const pushHost = endpoint?.hostname.toLowerCase() || '';
+  const trustedPushHost = pushHost === 'fcm.googleapis.com' || pushHost.endsWith('.push.services.mozilla.com') || pushHost === 'web.push.apple.com' || pushHost.endsWith('.push.apple.com') || pushHost.endsWith('.notify.windows.com');
+  if (!order || !endpoint || endpoint.protocol !== 'https:' || endpoint.port || !trustedPushHost || typeof sub.keys?.p256dh !== 'string' || typeof sub.keys?.auth !== 'string') return res.status(400).json({ error: 'بيانات اشتراك الإشعار غير صالحة' });
+  order.pushSubscriptions ||= [];
+  if (!order.pushSubscriptions.some((entry) => entry.endpoint === sub.endpoint)) {
+    if (order.pushSubscriptions.length >= 5) return res.status(400).json({ error: 'تم بلوغ حد الأجهزة لهذا الطلب' });
+    order.pushSubscriptions.push({ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }); await saveDb();
+  }
+  res.json({ ok: true });
+});
+app.get('/api/public/screen/:slug', async (req, res) => {
+  const shop = db.shops.find((s) => s.slug === req.params.slug && s.active);
+  if (!shop) return res.status(404).json({ error: 'المتجر غير متاح' });
+  const active = Date.now() < (shop.screenBannerUntil || 0) ? null : db.orders.find((o) => o.shopId === shop.id && o.status !== 'completed' && !o.scanned);
+  res.json({ shop: publicScreenShop(shop), activeOrder: active ? { number: active.number, status: active.status, statusLabel: statusLabels[active.status], customerName: active.customerName || '', qr: await QRCode.toDataURL(`${appBaseUrl()}/scan/${active.id}`, { width: 240, margin: 1 }) } : null });
+});
+
+app.get('*all', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.use((err, req, res, next) => { console.error(err); if (!res.headersSent) res.status(500).json({ error: 'حدث خطأ غير متوقع' }); });
+async function start() {
+  const remote = await loadRemoteDb();
+  if (remote) db = remote;
+  const changed = normalizeAndSeedDb();
+  if (changed || (redisUrl && !remote)) await saveDb();
+  const port = Number(process.env.PORT || 3000);
+  app.listen(port, '0.0.0.0', () => console.log(`نوى جاهز على http://localhost:${port}`));
+}
+start().catch((error) => { console.error('Startup failed:', error.message); process.exitCode = 1; });
