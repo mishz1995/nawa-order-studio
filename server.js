@@ -166,6 +166,7 @@ function normalizeAndSeedDb() {
   for (const shop of db.shops) {
     if (!Array.isArray(shop.visibleSections)) { shop.visibleSections = [...allShopSections]; changed = true; }
     if (typeof shop.chatEnabled !== 'boolean') { shop.chatEnabled = true; changed = true; }
+    if (typeof shop.customCssEnabled !== 'boolean') { shop.customCssEnabled = true; changed = true; }
     if (!shop.customCss || typeof shop.customCss !== 'object') { shop.customCss = { store: '', card: '', screen: '' }; changed = true; }
     if (!shop.cardColors || typeof shop.cardColors !== 'object') { shop.cardColors = { ...defaultCardColors }; changed = true; }
     if (!shop.cardStyle || typeof shop.cardStyle !== 'object') { shop.cardStyle = { ...defaultCardStyle }; changed = true; }
@@ -331,7 +332,7 @@ const subscriptionDaysRemaining = (shop, now = Date.now()) => {
 };
 const subscriptionExpired = (shop, now = Date.now()) => subscriptionDaysRemaining(shop, now) === 0;
 const safeCardStyle = (value) => ({ padding: Number.isInteger(value?.padding) && value.padding >= 0 && value.padding <= 48 ? value.padding : defaultCardStyle.padding, radius: Number.isInteger(value?.radius) && value.radius >= 14 && value.radius <= 40 ? value.radius : defaultCardStyle.radius, scale: Number.isInteger(value?.scale) && value.scale >= 90 && value.scale <= 115 ? value.scale : defaultCardStyle.scale, shadow: Number.isInteger(value?.shadow) && value.shadow >= 0 && value.shadow <= 30 ? value.shadow : defaultCardStyle.shadow });
-const safeShop = (shop) => { const remaining = subscriptionDaysRemaining(shop); const expired = remaining === 0; return { id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active && !expired, subscriptionEndDate: validSubscriptionDate(shop.subscriptionEndDate) ? shop.subscriptionEndDate : '', subscriptionDaysRemaining: remaining, subscriptionExpired: expired, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), cardColors: safeColors(shop.cardColors), cardStyle: safeCardStyle(shop.cardStyle), visibleSections: shopSections(shop), chatEnabled: shop.chatEnabled !== false, customCss: safeShopCss(shop.customCss), createdAt: shop.createdAt }; };
+const safeShop = (shop) => { const remaining = subscriptionDaysRemaining(shop); const expired = remaining === 0; return { id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active && !expired, subscriptionEndDate: validSubscriptionDate(shop.subscriptionEndDate) ? shop.subscriptionEndDate : '', subscriptionDaysRemaining: remaining, subscriptionExpired: expired, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), cardColors: safeColors(shop.cardColors), cardStyle: safeCardStyle(shop.cardStyle), visibleSections: shopSections(shop), chatEnabled: shop.chatEnabled !== false, customCssEnabled: shop.customCssEnabled !== false, customCss: safeShopCss(shop.customCss), createdAt: shop.createdAt }; };
 const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage) });
 const sanitizeItem = (item) => ({ id: item.id, name: item.name, category: item.category, prepMinutes: item.prepMinutes, image: catalogImages.includes(item.image) ? item.image : productImage(item.name,item.category), active: item.active !== false });
 const safeOrder = (order) => { const { pushSubscriptions, ...visible } = order; return visible; };
@@ -437,7 +438,7 @@ app.get('/api/public/custom-style.css', (req, res) => {
 });
 app.get('/api/public/shop-style.css/:slug/:surface', (req, res) => {
   const shop = db.shops.find((entry) => entry.slug === req.params.slug);
-  const css = shop && Object.hasOwn(shopCssScopes, req.params.surface) ? sanitizeShopCss(shop.customCss?.[req.params.surface] || '', req.params.surface) : null;
+  const css = shop && Object.hasOwn(shopCssScopes, req.params.surface) ? (shop.customCssEnabled === false ? '' : sanitizeShopCss(shop.customCss?.[req.params.surface] || '', req.params.surface)) : null;
   if (!shop || css === null) return res.status(404).type('text/plain').send('Not found');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -561,7 +562,7 @@ app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
   const customCss = req.body?.customCss === undefined ? { store: '', card: '', screen: '' } : sanitizeShopCssSet(req.body.customCss);
   if (!customCss) return res.status(400).json({ error: 'تحقق من CSS: استخدم محددات داخل مساحة المتجر أو بطاقة العميل أو شاشة البانر، دون روابط أو قواعد عامة.' });
   const slug = `${username.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-${crypto.randomBytes(2).toString('hex')}`;
-  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, subscriptionEndDate, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', bannerImage: safeImage(req.body?.bannerImage), iconImage: safeImage(req.body?.iconImage), cardColors: safeColors(req.body?.cardColors), cardStyle: safeCardStyle(req.body?.cardStyle), visibleSections: Array.isArray(req.body?.visibleSections) ? req.body.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections], chatEnabled: req.body?.chatEnabled !== false, customCss, createdAt: new Date().toISOString() };
+  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, subscriptionEndDate, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', bannerImage: safeImage(req.body?.bannerImage), iconImage: safeImage(req.body?.iconImage), cardColors: safeColors(req.body?.cardColors), cardStyle: safeCardStyle(req.body?.cardStyle), visibleSections: Array.isArray(req.body?.visibleSections) ? req.body.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections], chatEnabled: req.body?.chatEnabled !== false, customCssEnabled: req.body?.customCssEnabled !== false, customCss, createdAt: new Date().toISOString() };
   if ((req.body?.bannerImage && !shop.bannerImage) || (req.body?.iconImage && !shop.iconImage)) return res.status(400).json({ error: 'الصورة غير صالحة أو أكبر من الحد المسموح' });
   db.shops.push(shop); await saveDb(); res.status(201).json({ shop: safeShop(shop) });
 });
@@ -611,6 +612,10 @@ app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) =
     const customCss = sanitizeShopCssSet(req.body.customCss);
     if (!customCss) return res.status(400).json({ error: 'تحقق من CSS: استخدم محددات داخل مساحة المتجر أو بطاقة العميل أو شاشة البانر، دون روابط أو قواعد عامة.' });
     shop.customCss = customCss;
+  }
+  if (req.body?.customCssEnabled !== undefined) {
+    if (typeof req.body.customCssEnabled !== 'boolean') return res.status(400).json({ error: 'حالة CSS المخصص غير صالحة' });
+    shop.customCssEnabled = req.body.customCssEnabled;
   }
   if (req.body?.visibleSections !== undefined) {
     if (!Array.isArray(req.body.visibleSections) || req.body.visibleSections.some((section) => !allShopSections.includes(section))) return res.status(400).json({ error: 'قائمة أقسام المتجر غير صالحة' });
