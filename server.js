@@ -164,6 +164,11 @@ function normalizeAndSeedDb() {
   if (typeof db.settings.adminDisplayName !== 'string') { db.settings.adminDisplayName = ''; changed = true; }
   if (!db.settings.textOverrides || typeof db.settings.textOverrides !== 'object' || Array.isArray(db.settings.textOverrides)) { db.settings.textOverrides = {}; changed = true; }
   for (const shop of db.shops) {
+    if (!Array.isArray(shop.visibleSections)) { shop.visibleSections = [...allShopSections]; changed = true; }
+    if (!shop.cardColors || typeof shop.cardColors !== 'object') { shop.cardColors = { ...defaultCardColors }; changed = true; }
+    if (!shop.cardStyle || typeof shop.cardStyle !== 'object') { shop.cardStyle = { ...defaultCardStyle }; changed = true; }
+    if (typeof shop.bannerImage !== 'string') { shop.bannerImage = ''; changed = true; }
+    if (typeof shop.iconImage !== 'string') { shop.iconImage = ''; changed = true; }
     if (!['catalog', 'custom'].includes(shop.orderMode)) { shop.orderMode = 'catalog'; changed = true; }
     if (!Array.isArray(shop.items)) {
       shop.items = [
@@ -209,7 +214,7 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(express.json({ limit: '128kb' }));
+app.use(express.json({ limit: '5mb' }));
 const sessionOptions = {
   name: 'nawa.sid',
   secret: process.env.SESSION_SECRET,
@@ -248,8 +253,15 @@ app.use('/api', async (req, res, next) => {
   attempts.set(key, bucket);
   next();
 });
-const safeShop = (shop) => ({ id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, createdAt: shop.createdAt });
-const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, bannerText: shop.bannerText });
+const allShopSections = ['home', 'menu', 'design'];
+const defaultCardColors = { surface: '#ffffff', text: '#22251f', accent: '#c94f3d', border: '#e8e6e1' };
+const defaultCardStyle = { radius: 28, scale: 100, shadow: 10 };
+const safeImage = (value) => typeof value === 'string' && value.length <= 1_500_000 && /^data:image\/(?:webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : '';
+const shopSections = (shop) => Array.isArray(shop.visibleSections) ? shop.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections];
+const safeColors = (value) => Object.fromEntries(Object.entries(defaultCardColors).map(([key, fallback]) => [key, typeof value?.[key] === 'string' && /^#[0-9a-f]{6}$/i.test(value[key]) ? value[key] : fallback]));
+const safeCardStyle = (value) => ({ radius: Number.isInteger(value?.radius) && value.radius >= 14 && value.radius <= 40 ? value.radius : defaultCardStyle.radius, scale: Number.isInteger(value?.scale) && value.scale >= 90 && value.scale <= 115 ? value.scale : defaultCardStyle.scale, shadow: Number.isInteger(value?.shadow) && value.shadow >= 0 && value.shadow <= 30 ? value.shadow : defaultCardStyle.shadow });
+const safeShop = (shop) => ({ id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), cardColors: safeColors(shop.cardColors), cardStyle: safeCardStyle(shop.cardStyle), visibleSections: shopSections(shop), createdAt: shop.createdAt });
+const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage) });
 const sanitizeItem = (item) => ({ id: item.id, name: item.name, category: item.category, prepMinutes: item.prepMinutes, image: catalogImages.includes(item.image) ? item.image : productImage(item.name,item.category), active: item.active !== false });
 const safeOrder = (order) => { const { pushSubscriptions, ...visible } = order; return visible; };
 async function manageShopItems(shop, req, res) {
@@ -465,7 +477,8 @@ app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
   if (db.shops.some((s) => s.username === username) || db.users.some((u) => u.username === username)) return res.status(409).json({ error: 'اسم المستخدم مستخدم من قبل' });
   if (req.body?.reviewUrl && !reviewUrl) return res.status(400).json({ error: 'أدخل رابط Google Maps آمن يبدأ بـ HTTPS' });
   const slug = `${username.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-${crypto.randomBytes(2).toString('hex')}`;
-  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', createdAt: new Date().toISOString() };
+  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', bannerImage: safeImage(req.body?.bannerImage), iconImage: safeImage(req.body?.iconImage), cardColors: safeColors(req.body?.cardColors), cardStyle: safeCardStyle(req.body?.cardStyle), visibleSections: Array.isArray(req.body?.visibleSections) ? req.body.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections], createdAt: new Date().toISOString() };
+  if ((req.body?.bannerImage && !shop.bannerImage) || (req.body?.iconImage && !shop.iconImage)) return res.status(400).json({ error: 'الصورة غير صالحة أو أكبر من الحد المسموح' });
   db.shops.push(shop); await saveDb(); res.status(201).json({ shop: safeShop(shop) });
 });
 app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) => {
@@ -491,6 +504,24 @@ app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) =
   if (req.body?.theme !== undefined && themes.includes(req.body.theme)) shop.theme = req.body.theme;
   if (req.body?.orderMode !== undefined && ['catalog','custom'].includes(req.body.orderMode)) shop.orderMode = req.body.orderMode;
   if (req.body?.bannerText !== undefined) shop.bannerText = cleanText(req.body.bannerText, 90);
+  for (const key of ['bannerImage', 'iconImage']) if (req.body?.[key] !== undefined) {
+    const value = req.body[key] === '' ? '' : safeImage(req.body[key]);
+    if (req.body[key] !== '' && !value) return res.status(400).json({ error: 'الصورة غير صالحة أو أكبر من الحد المسموح (1.1 ميغابايت)' });
+    shop[key] = value;
+  }
+  if (req.body?.cardColors !== undefined) {
+    if (!req.body.cardColors || typeof req.body.cardColors !== 'object' || Array.isArray(req.body.cardColors) || Object.keys(req.body.cardColors).some((key) => !Object.hasOwn(defaultCardColors, key) || !/^#[0-9a-f]{6}$/i.test(req.body.cardColors[key]))) return res.status(400).json({ error: 'تحقق من ألوان البطاقة' });
+    shop.cardColors = safeColors(req.body.cardColors);
+  }
+  if (req.body?.cardStyle !== undefined) {
+    const style=req.body.cardStyle;
+    if(!style||typeof style!=='object'||Array.isArray(style)||!Number.isInteger(style.radius)||style.radius<14||style.radius>40||!Number.isInteger(style.scale)||style.scale<90||style.scale>115||!Number.isInteger(style.shadow)||style.shadow<0||style.shadow>30)return res.status(400).json({error:'إعداد شكل البطاقة خارج النطاق المسموح'});
+    shop.cardStyle=safeCardStyle(style);
+  }
+  if (req.body?.visibleSections !== undefined) {
+    if (!Array.isArray(req.body.visibleSections) || req.body.visibleSections.some((section) => !allShopSections.includes(section))) return res.status(400).json({ error: 'قائمة أقسام المتجر غير صالحة' });
+    shop.visibleSections = [...new Set(req.body.visibleSections)];
+  }
   if (req.body?.active !== undefined) shop.active = !!req.body.active;
   await saveDb(); res.json({ shop: safeShop(shop) });
 });
@@ -503,6 +534,26 @@ app.get('/api/admin/shops/:id/items', requireLogin, requireAdmin, (req, res) => 
   const shop = db.shops.find((s) => s.id === req.params.id);
   return shop ? res.json({ items: (shop.items || []).map(sanitizeItem) }) : res.status(404).json({ error: 'المتجر غير موجود' });
 });
+function chatForShop(shop, req, res) {
+  shop.messages ||= [];
+  if (req.method === 'GET') {
+    const role = req.session.user.role, counterpart = role === 'admin' ? 'shop' : 'admin', readKey = role === 'admin' ? 'adminReadAt' : 'storeReadAt';
+    const latestUnread = [...shop.messages].reverse().find((message) => message.sender === counterpart && message.createdAt > (shop[readKey] || ''));
+    if (latestUnread) { shop[readKey] = latestUnread.createdAt; saveDb().catch(() => {}); }
+    return res.json({ messages: shop.messages.slice(-100) });
+  }
+  const text = cleanText(req.body?.text, 1000);
+  if (text.length < 1) return res.status(400).json({ error: 'اكتب رسالة قبل الإرسال' });
+  const role = req.session.user.role;
+  const message = { id: crypto.randomUUID(), sender: role, senderName: role === 'admin' ? (db.settings.adminDisplayName || req.session.user.username) : shop.name, text, createdAt: new Date().toISOString() };
+  shop.messages.push(message); if (shop.messages.length > 500) shop.messages.splice(0, shop.messages.length - 500);
+  saveDb().then(() => res.status(201).json({ message })).catch(() => res.status(500).json({ error: 'تعذر حفظ الرسالة' }));
+}
+app.get('/api/admin/chat/inbox', requireLogin, requireAdmin, (req, res) => res.json({ chats: db.shops.map((shop) => ({ id: shop.id, name: shop.name, unread: (shop.messages || []).filter((message) => message.sender === 'shop' && message.createdAt > (shop.adminReadAt || '')).length, latest: shop.messages?.at(-1) || null })) }));
+app.get('/api/admin/shops/:id/chat', requireLogin, requireAdmin, (req, res) => { const shop=db.shops.find((entry)=>entry.id===req.params.id); return shop ? chatForShop(shop,req,res) : res.status(404).json({error:'المتجر غير موجود'}); });
+app.post('/api/admin/shops/:id/chat', requireLogin, requireAdmin, (req, res) => { const shop=db.shops.find((entry)=>entry.id===req.params.id); return shop ? chatForShop(shop,req,res) : res.status(404).json({error:'المتجر غير موجود'}); });
+app.get('/api/shop/chat', requireLogin, requireShop, (req,res)=>chatForShop(req.shop,req,res));
+app.post('/api/shop/chat', requireLogin, requireShop, (req,res)=>chatForShop(req.shop,req,res));
 app.post('/api/admin/shops/:id/items', requireLogin, requireAdmin, (req, res) => {
   const shop = db.shops.find((s) => s.id === req.params.id);
   return shop ? manageShopItems(shop, req, res) : res.status(404).json({ error: 'المتجر غير موجود' });
@@ -517,7 +568,7 @@ app.delete('/api/admin/shops/:id/items/:itemId', requireLogin, requireAdmin, (re
 });
 
 app.get('/api/shop/orders', requireLogin, requireShop, (req, res) => res.json({ orders: db.orders.filter((o) => o.shopId === req.shop.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(safeOrder) }));
-app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText } }));
+app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), cardColors: safeColors(req.shop.cardColors), cardStyle: safeCardStyle(req.shop.cardStyle), visibleSections: shopSections(req.shop) } }));
 async function createOrderForShop(shop, body, res) {
   const customerName = cleanText(body?.customerName, 60);
   let item = '', items = [], prepMinutes = 0;
@@ -609,7 +660,9 @@ app.get('/api/public/orders/:id', async (req, res) => {
   if (!order) return res.status(404).json({ error: 'الطلب غير موجود' });
   if (!order.scanned) return res.status(403).json({ error: 'امسح رمز الطلب المعروض على شاشة المتجر لعرض بطاقة الحالة' });
   const shop = db.shops.find((s) => s.id === order.shopId);
-  res.json({ order: { id: order.id, number: order.number, customerName: order.customerName || '', item: order.item, items: order.items || [], prepMinutes: order.prepMinutes || 0, status: order.status, statusLabel: statusLabels[order.status], updatedAt: order.updatedAt }, shop: { name: shop?.name || '', bannerText: shop?.bannerText || '', reviewUrl: order.status === 'completed' ? shop?.reviewUrl || '' : '', theme: shop?.theme || 'studio' } });
+  const publicShop={ name: shop?.name || '', bannerText: shop?.bannerText || '', reviewUrl: order.status === 'completed' ? shop?.reviewUrl || '' : '', theme: shop?.theme || 'studio' };
+  if(req.query.design==='1')Object.assign(publicShop,{bannerImage:safeImage(shop?.bannerImage),iconImage:safeImage(shop?.iconImage),cardColors:safeColors(shop?.cardColors),cardStyle:safeCardStyle(shop?.cardStyle)});
+  res.json({ order: { id: order.id, number: order.number, customerName: order.customerName || '', item: order.item, items: order.items || [], prepMinutes: order.prepMinutes || 0, status: order.status, statusLabel: statusLabels[order.status], updatedAt: order.updatedAt }, shop: publicShop });
 });
 app.get('/scan/:id', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
@@ -642,7 +695,8 @@ app.get('/api/public/screen/:slug', async (req, res) => {
   const shop = db.shops.find((s) => s.slug === req.params.slug && s.active);
   if (!shop) return res.status(404).json({ error: 'المتجر غير متاح' });
   const active = Date.now() < (shop.screenBannerUntil || 0) ? null : db.orders.find((o) => o.shopId === shop.id && o.status !== 'completed' && !o.scanned);
-  res.json({ shop: publicScreenShop(shop), activeOrder: active ? { number: active.number, status: active.status, statusLabel: statusLabels[active.status], qr: await QRCode.toDataURL(`${appBaseUrl()}/scan/${active.id}`, { width: 240, margin: 1 }) } : null });
+  const screenShop=publicScreenShop(shop);if(req.query.design!=='1'){delete screenShop.bannerImage;delete screenShop.iconImage;}
+  res.json({ shop: screenShop, activeOrder: active ? { number: active.number, status: active.status, statusLabel: statusLabels[active.status], qr: await QRCode.toDataURL(`${appBaseUrl()}/scan/${active.id}`, { width: 240, margin: 1 }) } : null });
 });
 
 app.get('*all', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
