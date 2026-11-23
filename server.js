@@ -259,8 +259,24 @@ const defaultCardStyle = { width: 440, height: 640, padding: 16, outerPadding: 1
 const safeImage = (value) => typeof value === 'string' && value.length <= 1_500_000 && /^data:image\/(?:webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : '';
 const shopSections = (shop) => Array.isArray(shop.visibleSections) ? shop.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections];
 const safeColors = (value) => Object.fromEntries(Object.entries(defaultCardColors).map(([key, fallback]) => [key, typeof value?.[key] === 'string' && /^#[0-9a-f]{6}$/i.test(value[key]) ? value[key] : fallback]));
+const validSubscriptionDate = (value) => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+};
+const subscriptionExpiresAt = (value) => {
+  if (!validSubscriptionDate(value)) return null;
+  const [year, month, day] = value.split('-').map(Number);
+  return Date.UTC(year, month - 1, day + 1) - 3 * 60 * 60 * 1000;
+};
+const subscriptionDaysRemaining = (shop, now = Date.now()) => {
+  const expiresAt = subscriptionExpiresAt(shop.subscriptionEndDate);
+  return expiresAt === null ? null : Math.max(0, Math.ceil((expiresAt - now) / 86_400_000));
+};
+const subscriptionExpired = (shop, now = Date.now()) => subscriptionDaysRemaining(shop, now) === 0;
 const safeCardStyle = (value) => ({ width: Number.isInteger(value?.width) && value.width >= 320 && value.width <= 640 ? value.width : defaultCardStyle.width, height: Number.isInteger(value?.height) && value.height >= 480 && value.height <= 900 ? value.height : defaultCardStyle.height, padding: Number.isInteger(value?.padding) && value.padding >= 0 && value.padding <= 48 ? value.padding : defaultCardStyle.padding, outerPadding: Number.isInteger(value?.outerPadding) && value.outerPadding >= 0 && value.outerPadding <= 48 ? value.outerPadding : defaultCardStyle.outerPadding, radius: Number.isInteger(value?.radius) && value.radius >= 14 && value.radius <= 40 ? value.radius : defaultCardStyle.radius, scale: Number.isInteger(value?.scale) && value.scale >= 90 && value.scale <= 115 ? value.scale : defaultCardStyle.scale, shadow: Number.isInteger(value?.shadow) && value.shadow >= 0 && value.shadow <= 30 ? value.shadow : defaultCardStyle.shadow });
-const safeShop = (shop) => ({ id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), cardColors: safeColors(shop.cardColors), cardStyle: safeCardStyle(shop.cardStyle), visibleSections: shopSections(shop), createdAt: shop.createdAt });
+const safeShop = (shop) => { const remaining = subscriptionDaysRemaining(shop); const expired = remaining === 0; return { id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active && !expired, subscriptionEndDate: validSubscriptionDate(shop.subscriptionEndDate) ? shop.subscriptionEndDate : '', subscriptionDaysRemaining: remaining, subscriptionExpired: expired, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), cardColors: safeColors(shop.cardColors), cardStyle: safeCardStyle(shop.cardStyle), visibleSections: shopSections(shop), createdAt: shop.createdAt }; };
 const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage) });
 const sanitizeItem = (item) => ({ id: item.id, name: item.name, category: item.category, prepMinutes: item.prepMinutes, image: catalogImages.includes(item.image) ? item.image : productImage(item.name,item.category), active: item.active !== false });
 const safeOrder = (order) => { const { pushSubscriptions, ...visible } = order; return visible; };
@@ -300,6 +316,7 @@ const requireShop = (req, res, next) => {
   if (!req.session.user || req.session.user.role !== 'shop') return res.status(403).json({ error: 'هذه الصفحة خاصة بالمتجر' });
   const shop = db.shops.find((item) => item.id === req.session.user.shopId && item.active && (item.authVersion || 0) === (req.session.authVersion || 0));
   if (!shop) return res.status(403).json({ error: 'المتجر غير متاح' });
+  if (subscriptionExpired(shop)) return res.status(403).json({ error: 'انتهت صلاحية اشتراك المتجر. يرجى التواصل مع الإدارة لتجديده.' });
   req.shop = shop;
   next();
 };
@@ -319,8 +336,9 @@ app.post('/api/auth/login', (req, res) => {
   const username = cleanText(req.body?.username, 40);
   const password = typeof req.body?.password === 'string' ? req.body.password.slice(0, 128) : '';
   const admin = db.users.find((user) => user.role === 'admin' && user.username === username);
-  const shop = db.shops.find((item) => item.username === username && item.active);
-  const account = admin || (shop ? { ...shop, role: 'shop', shopId: shop.id } : null);
+  const shop = db.shops.find((item) => item.username === username);
+  if (!admin && shop && verifyPassword(password, shop.passwordHash) && subscriptionExpired(shop)) return res.status(403).json({ error: 'انتهت صلاحية اشتراك المتجر. يرجى التواصل مع الإدارة لتجديده.' });
+  const account = admin || (shop?.active ? { ...shop, role: 'shop', shopId: shop.id } : null);
   if (!account || !verifyPassword(password, account.passwordHash)) return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
   req.session.regenerate((err) => {
     if (err) return res.status(500).json({ error: 'تعذر بدء الجلسة' });
@@ -473,17 +491,19 @@ app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
   const reviewUrl = req.body?.reviewUrl ? googleUrl(req.body.reviewUrl) : '';
   const theme = themes.includes(req.body?.theme) ? req.body.theme : 'studio';
   const orderMode = ['catalog','custom'].includes(req.body?.orderMode) ? req.body.orderMode : 'catalog';
-  if (name.length < 2 || !/^[A-Za-z0-9_.-]{3,40}$/.test(username) || !validPassword(password)) return res.status(400).json({ error: 'تحقق من الاسم واسم المستخدم وكلمة المرور (8 خانات على الأقل)' });
+  const subscriptionEndDate = req.body?.subscriptionEndDate;
+  if (name.length < 2 || !/^[A-Za-z0-9_.-]{3,40}$/.test(username) || !validPassword(password) || !validSubscriptionDate(subscriptionEndDate)) return res.status(400).json({ error: 'تحقق من بيانات المتجر وحدد تاريخ انتهاء اشتراك صالحًا' });
   if (db.shops.some((s) => s.username === username) || db.users.some((u) => u.username === username)) return res.status(409).json({ error: 'اسم المستخدم مستخدم من قبل' });
   if (req.body?.reviewUrl && !reviewUrl) return res.status(400).json({ error: 'أدخل رابط Google Maps آمن يبدأ بـ HTTPS' });
   const slug = `${username.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-${crypto.randomBytes(2).toString('hex')}`;
-  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', bannerImage: safeImage(req.body?.bannerImage), iconImage: safeImage(req.body?.iconImage), cardColors: safeColors(req.body?.cardColors), cardStyle: safeCardStyle(req.body?.cardStyle), visibleSections: Array.isArray(req.body?.visibleSections) ? req.body.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections], createdAt: new Date().toISOString() };
+  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, subscriptionEndDate, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', bannerImage: safeImage(req.body?.bannerImage), iconImage: safeImage(req.body?.iconImage), cardColors: safeColors(req.body?.cardColors), cardStyle: safeCardStyle(req.body?.cardStyle), visibleSections: Array.isArray(req.body?.visibleSections) ? req.body.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections], createdAt: new Date().toISOString() };
   if ((req.body?.bannerImage && !shop.bannerImage) || (req.body?.iconImage && !shop.iconImage)) return res.status(400).json({ error: 'الصورة غير صالحة أو أكبر من الحد المسموح' });
   db.shops.push(shop); await saveDb(); res.status(201).json({ shop: safeShop(shop) });
 });
 app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) => {
   const shop = db.shops.find((s) => s.id === req.params.id);
   if (!shop) return res.status(404).json({ error: 'المتجر غير موجود' });
+  if (req.body?.subscriptionEndDate !== undefined && !validSubscriptionDate(req.body.subscriptionEndDate)) return res.status(400).json({ error: 'حدد تاريخ انتهاء اشتراك صالحًا' });
   if (req.body?.username !== undefined) {
     const username = cleanText(req.body.username, 40);
     if (!/^[A-Za-z0-9_.-]{3,40}$/.test(username)) return res.status(400).json({ error: 'اسم مستخدم المتجر غير صالح' });
@@ -522,6 +542,7 @@ app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) =
     if (!Array.isArray(req.body.visibleSections) || req.body.visibleSections.some((section) => !allShopSections.includes(section))) return res.status(400).json({ error: 'قائمة أقسام المتجر غير صالحة' });
     shop.visibleSections = [...new Set(req.body.visibleSections)];
   }
+  if (req.body?.subscriptionEndDate !== undefined) shop.subscriptionEndDate = req.body.subscriptionEndDate;
   if (req.body?.active !== undefined) shop.active = !!req.body.active;
   await saveDb(); res.json({ shop: safeShop(shop) });
 });
@@ -568,7 +589,7 @@ app.delete('/api/admin/shops/:id/items/:itemId', requireLogin, requireAdmin, (re
 });
 
 app.get('/api/shop/orders', requireLogin, requireShop, (req, res) => res.json({ orders: db.orders.filter((o) => o.shopId === req.shop.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(safeOrder) }));
-app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), cardColors: safeColors(req.shop.cardColors), cardStyle: safeCardStyle(req.shop.cardStyle), visibleSections: shopSections(req.shop) } }));
+app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), cardColors: safeColors(req.shop.cardColors), cardStyle: safeCardStyle(req.shop.cardStyle), visibleSections: shopSections(req.shop), subscriptionEndDate: validSubscriptionDate(req.shop.subscriptionEndDate) ? req.shop.subscriptionEndDate : '', subscriptionDaysRemaining: subscriptionDaysRemaining(req.shop) } }));
 async function createOrderForShop(shop, body, res) {
   const customerName = cleanText(body?.customerName, 60);
   let item = '', items = [], prepMinutes = 0;
@@ -597,7 +618,7 @@ async function createOrderForShop(shop, body, res) {
 }
 app.post('/api/shop/orders', requireLogin, requireShop, async (req, res) => createOrderForShop(req.shop, req.body, res));
 app.post('/api/admin/shops/:id/orders', requireLogin, requireAdmin, async (req, res) => {
-  const shop = db.shops.find((entry) => entry.id === req.params.id && entry.active);
+  const shop = db.shops.find((entry) => entry.id === req.params.id && entry.active && !subscriptionExpired(entry));
   return shop ? createOrderForShop(shop, req.body, res) : res.status(404).json({ error: 'المتجر غير متاح' });
 });
 app.get('/api/admin/shops/:id/orders', requireLogin, requireAdmin, (req, res) => {
@@ -692,7 +713,7 @@ app.post('/api/public/orders/:id/push', async (req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/public/screen/:slug', async (req, res) => {
-  const shop = db.shops.find((s) => s.slug === req.params.slug && s.active);
+  const shop = db.shops.find((s) => s.slug === req.params.slug && s.active && !subscriptionExpired(s));
   if (!shop) return res.status(404).json({ error: 'المتجر غير متاح' });
   const active = Date.now() < (shop.screenBannerUntil || 0) ? null : db.orders.find((o) => o.shopId === shop.id && o.status !== 'completed' && !o.scanned);
   const screenShop=publicScreenShop(shop);if(req.query.design!=='1'){delete screenShop.bannerImage;delete screenShop.iconImage;}
