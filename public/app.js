@@ -216,7 +216,14 @@ async function storeOrderModal(user,adminShop=null){
     }catch(err){toast(err.message);button.disabled=false;}
   };
 }
-function subscriptionNotice(info={}){const date=info.subscriptionEndDate,english=(localStorage.getItem('nawa-language')||'ar')==='en';if(!date)return `<aside class="subscription-notice unset"><strong>${english?'Store subscription':'اشتراك المتجر'}</strong><span>${english?'The admin has not set an expiry date yet.':'لم يحدد الأدمن تاريخ انتهاء الاشتراك بعد.'}</span></aside>`;const days=Number(info.subscriptionDaysRemaining),urgent=days<=5,remaining=english?`${days} ${days===1?'day':'days'} left`:days===1?'باقي يوم واحد':`باقي ${days} أيام`,formatted=new Date(`${date}T00:00:00`).toLocaleDateString(uiLocale()),heading=english?(urgent?'Subscription ending soon':'Store subscription'):(urgent?'تنبيه: الاشتراك قريب الانتهاء':'اشتراك المتجر'),endLabel=english?'Ends':'تاريخ الانتهاء';return `<aside class="subscription-notice ${urgent?'urgent':''}"><strong>${heading}</strong><span>${remaining} · ${endLabel} ${formatted}</span></aside>`;}
+function subscriptionNotice(info={}){
+  const date=info.subscriptionEndDate,english=(localStorage.getItem('nawa-language')||'ar')==='en';
+  if(!date)return `<aside class="subscription-notice unset"><div class="subscription-copy"><strong>${english?'Store subscription':'اشتراك المتجر'}</strong><small>${english?'The admin has not set an expiry date. Contact them to confirm the term.':'لم يحدد الأدمن تاريخ انتهاء الاشتراك. تواصل معه لمعرفة المدة.'}</small></div></aside>`;
+  const days=Number(info.subscriptionDaysRemaining),urgent=days<=5,remaining=english?`${days} ${days===1?'day':'days'} left`:days===1?'باقي يوم واحد':`باقي ${days} أيام`,formatted=new Date(`${date}T00:00:00`).toLocaleDateString(uiLocale()),heading=english?(urgent?'Subscription ending soon':'Store subscription'):(urgent?'تنبيه: الاشتراك قريب الانتهاء':'اشتراك المتجر'),endLabel=english?'Ends':'تاريخ الانتهاء';
+  const key=info.slug||info.name||'store';window.__nawaSubscriptionDays||=Object.create(null);const previous=window.__nawaSubscriptionDays[key],changed=Number.isInteger(previous)&&previous!==days;window.__nawaSubscriptionDays[key]=days;
+  const numeral=days.toLocaleString(english?'en-US':'ar-SA'),digits=[...numeral].map((digit,index,array)=>`<span class="t-digit"${index===array.length-2?' data-stagger="1"':index===array.length-1?' data-stagger="2"':''} aria-hidden="true">${digit}</span>`).join(''),unit=english?(days===1?'day left':'days left'):(days===1?'يوم متبقي':'أيام متبقية');
+  return `<aside class="subscription-notice ${urgent?'urgent':''}"><div class="subscription-copy"><strong>${heading}</strong><small>${endLabel} ${formatted}</small></div><span class="subscription-count" role="group" aria-label="${esc(remaining)}"><span class="t-digit-group${changed?' is-animating':''}" aria-hidden="true">${digits}</span><span class="subscription-unit" aria-hidden="true">${unit}</span></span></aside>`;
+}
 async function storeView(page='home',user) {
   clearTimeout(window.storeTimer);
   const shop=(await api('/api/auth/me')).user;
