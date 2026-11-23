@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
-const FileStore = require('session-file-store')(session);
 const QRCode = require('qrcode');
 const webPush = require('web-push');
 const crypto = require('node:crypto');
@@ -13,7 +12,7 @@ const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'
 const dbFile = path.join(dataDir, 'nawa.enc');
 fs.mkdirSync(dataDir, { recursive: true });
 if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) throw new Error('Set SESSION_SECRET to at least 32 random characters.');
-if (!process.env.BOOTSTRAP_ADMIN_USERNAME || !process.env.BOOTSTRAP_ADMIN_PASSWORD || process.env.BOOTSTRAP_ADMIN_PASSWORD.length < 12) throw new Error('Set BOOTSTRAP_ADMIN_USERNAME and a 12+ character BOOTSTRAP_ADMIN_PASSWORD.');
+if (!process.env.BOOTSTRAP_ADMIN_USERNAME || !process.env.BOOTSTRAP_ADMIN_PASSWORD || process.env.BOOTSTRAP_ADMIN_PASSWORD.length < 8 || process.env.BOOTSTRAP_ADMIN_PASSWORD.length > 128) throw new Error('Set BOOTSTRAP_ADMIN_USERNAME and an 8–128 character BOOTSTRAP_ADMIN_PASSWORD.');
 
 const deriveKey = () => Buffer.from(crypto.hkdfSync('sha256', process.env.SESSION_SECRET, '', 'nawa-store-v1', 32));
 function decodeDb(encoded) {
@@ -89,10 +88,65 @@ class EncryptedUpstashSessionStore extends session.Store {
   destroy(sid, callback) { upstashCommand('DEL', [`nawa:session:${sid}`]).then(() => callback(null)).catch(callback); }
   touch(sid, sessionData, callback) { this.set(sid, sessionData, callback); }
 }
+class EncryptedFileSessionStore extends session.Store {
+  constructor() { super(); this.directory = path.join(dataDir, '.sessions'); fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 }); }
+  fileFor(sid) { return path.join(this.directory, `${crypto.createHash('sha256').update(sid).digest('hex')}.enc`); }
+  get(sid, callback) {
+    fs.readFile(this.fileFor(sid), 'utf8', (error, encoded) => {
+      if (error?.code === 'ENOENT') return callback(null, null);
+      if (error) return callback(error);
+      try {
+        const value = decryptSession(encoded);
+        if (value.cookie?.expires && new Date(value.cookie.expires).getTime() <= Date.now()) return this.destroy(sid, (destroyError) => callback(destroyError, null));
+        callback(null, value);
+      } catch (decodeError) { callback(decodeError); }
+    });
+  }
+  set(sid, value, callback) {
+    const file = this.fileFor(sid), temp = `${file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    fs.writeFile(temp, encryptSession(value), { encoding: 'utf8', mode: 0o600 }, (error) => {
+      if (error) return callback(error);
+      fs.rename(temp, file, callback);
+    });
+  }
+  destroy(sid, callback) { fs.rm(this.fileFor(sid), { force: true }, callback); }
+  touch(sid, value, callback) { this.set(sid, value, callback); }
+}
 const hashPassword = (password) => {
   const salt = crypto.randomBytes(16);
   return `scrypt$${salt.toString('hex')}$${crypto.scryptSync(password, salt, 64).toString('hex')}`;
 };
+const validPassword = (password) => typeof password === 'string' && password.length >= 8 && password.length <= 128;
+const base32Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+function base32Encode(input) {
+  let bits = 0, value = 0, output = '';
+  for (const byte of input) { value = (value << 8) | byte; bits += 8; while (bits >= 5) { output += base32Alphabet[(value >>> (bits - 5)) & 31]; bits -= 5; } }
+  if (bits) output += base32Alphabet[(value << (5 - bits)) & 31];
+  return output;
+}
+function base32Decode(input) {
+  let bits = 0, value = 0;
+  const output = [];
+  for (const char of String(input).replace(/=+$/g, '').toUpperCase()) {
+    const index = base32Alphabet.indexOf(char);
+    if (index < 0) throw new Error('Invalid base32');
+    value = (value << 5) | index; bits += 5;
+    if (bits >= 8) { output.push((value >>> (bits - 8)) & 255); bits -= 8; }
+  }
+  return Buffer.from(output);
+}
+function verifyTotp(secret, code) {
+  if (typeof code !== 'string' || !/^\d{6}$/.test(code)) return false;
+  const now = Math.floor(Date.now() / 30_000);
+  for (let drift = -1; drift <= 1; drift++) {
+    const counter = Buffer.alloc(8); counter.writeBigUInt64BE(BigInt(now + drift));
+    const digest = crypto.createHmac('sha1', base32Decode(secret)).update(counter).digest();
+    const offset = digest[digest.length - 1] & 0x0f;
+    const value = (digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000;
+    if (crypto.timingSafeEqual(Buffer.from(String(value).padStart(6, '0')), Buffer.from(code))) return true;
+  }
+  return false;
+}
 const verifyPassword = (password, stored) => {
   if (!stored?.startsWith('scrypt$')) return false;
   const [, saltHex, expectedHex] = stored.split('$');
@@ -139,11 +193,14 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
   if (process.env.NODE_ENV === 'production') {
     if (req.secure || req.get('x-forwarded-proto') === 'https') res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
   }
-  if (['POST', 'PATCH', 'DELETE'].includes(req.method) && req.get('origin') && req.get('origin') !== `${req.protocol}://${req.get('host')}`) return res.status(403).json({ error: 'مصدر الطلب غير صالح' });
+  if (['POST', 'PATCH', 'DELETE'].includes(req.method)) {
+    const origin = req.get('origin');
+    if (!origin || origin !== `${req.protocol}://${req.get('host')}`) return res.status(403).json({ error: 'مصدر الطلب غير صالح' });
+  }
   next();
 });
 app.use(express.json({ limit: '20kb' }));
@@ -155,20 +212,33 @@ const sessionOptions = {
   cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 8 * 60 * 60 * 1000 }
 };
 if (redisUrl) sessionOptions.store = new EncryptedUpstashSessionStore();
-else if (process.env.NODE_ENV !== 'production') sessionOptions.store = new FileStore({ path: path.join(dataDir, '.sessions'), retries: 0, logFn: () => {} });
+else if (process.env.NODE_ENV !== 'production') sessionOptions.store = new EncryptedFileSessionStore();
 app.use(session(sessionOptions));
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
 const attempts = new Map();
 const pruneAttempts = setInterval(() => { const now = Date.now(); for (const [key, bucket] of attempts) if (bucket.until < now) attempts.delete(key); }, 60_000);
 pruneAttempts.unref();
-app.use('/api', (req, res, next) => {
+app.use('/api', async (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store');
-  const key = `${req.ip}:${req.path}`;
+  const key = `nawa:rate:${req.ip}:${req.path}`;
   const now = Date.now();
+  const windowMs = req.path === '/auth/login' || req.path === '/auth/verify-2fa' ? 15 * 60_000 : 60_000;
+  const limit = req.path === '/auth/login' || req.path === '/auth/verify-2fa' ? 10 : 180;
+  if (redisUrl) {
+    try {
+      const count = Number(await upstashCommand('INCR', [key]));
+      if (count === 1) await upstashCommand('EXPIRE', [key, String(Math.ceil(windowMs / 1000))]);
+      if (count > limit) return res.status(429).json({ error: 'محاولات كثيرة، حاول لاحقاً' });
+      return next();
+    } catch {
+      console.error('Rate limiter storage unavailable');
+      return res.status(503).json({ error: 'خدمة الحماية غير متاحة مؤقتًا' });
+    }
+  }
   let bucket = attempts.get(key);
-  if (!bucket || bucket.until < now) bucket = { count: 0, until: now + (req.path === '/auth/login' ? 15 * 60_000 : 60_000) };
-  if (++bucket.count > (req.path === '/auth/login' ? 10 : 180)) return res.status(429).json({ error: 'محاولات كثيرة، حاول لاحقاً' });
+  if (!bucket || bucket.until < now) bucket = { count: 0, until: now + windowMs };
+  if (++bucket.count > limit) return res.status(429).json({ error: 'محاولات كثيرة، حاول لاحقاً' });
   attempts.set(key, bucket);
   next();
 });
@@ -198,11 +268,17 @@ async function manageShopItems(shop, req, res) {
   }
   shop.items = items.filter((entry) => entry.id !== item.id); await saveDb(); return res.json({ ok: true });
 }
-const requireLogin = (req, res, next) => req.session.user ? next() : res.status(401).json({ error: 'سجّل الدخول أولاً' });
+const requireLogin = (req, res, next) => {
+  const user = req.session.user;
+  if (!user) return res.status(401).json({ error: 'سجّل الدخول أولاً' });
+  const record = user.role === 'admin' ? db.users.find((entry) => entry.id === user.id) : db.shops.find((entry) => entry.id === user.shopId);
+  if (!record || (record.authVersion || 0) !== (req.session.authVersion || 0)) return req.session.destroy(() => res.status(401).json({ error: 'انتهت صلاحية الجلسة، سجّل الدخول مجددًا' }));
+  next();
+};
 const requireAdmin = (req, res, next) => req.session.user?.role === 'admin' ? next() : res.status(403).json({ error: 'هذه الصلاحية للأدمن فقط' });
 const requireShop = (req, res, next) => {
   if (!req.session.user || req.session.user.role !== 'shop') return res.status(403).json({ error: 'هذه الصفحة خاصة بالمتجر' });
-  const shop = db.shops.find((item) => item.id === req.session.user.shopId && item.active);
+  const shop = db.shops.find((item) => item.id === req.session.user.shopId && item.active && (item.authVersion || 0) === (req.session.authVersion || 0));
   if (!shop) return res.status(403).json({ error: 'المتجر غير متاح' });
   req.shop = shop;
   next();
@@ -228,7 +304,22 @@ app.post('/api/auth/login', (req, res) => {
   if (!account || !verifyPassword(password, account.passwordHash)) return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
   req.session.regenerate((err) => {
     if (err) return res.status(500).json({ error: 'تعذر بدء الجلسة' });
+    if (account.role === 'admin' && account.totpSecret) {
+      req.session.pendingAdminId = account.id;
+      return res.json({ requiresTwoFactor: true });
+    }
+    req.session.authVersion = account.authVersion || 0;
     req.session.user = account.role === 'admin' ? { id: account.id, username: account.username, role: 'admin' } : { id: account.id, username: account.username, role: 'shop', shopId: account.shopId, name: account.name, slug: account.slug, theme: account.theme, bannerText: account.bannerText };
+    res.json({ user: req.session.user });
+  });
+});
+app.post('/api/auth/verify-2fa', (req, res) => {
+  const admin = db.users.find((user) => user.id === req.session.pendingAdminId && user.role === 'admin' && user.totpSecret);
+  if (!admin || !verifyTotp(admin.totpSecret, req.body?.code)) return res.status(401).json({ error: 'رمز التحقق غير صحيح' });
+  req.session.regenerate((err) => {
+    if (err) return res.status(500).json({ error: 'تعذر بدء الجلسة' });
+    req.session.authVersion = admin.authVersion || 0;
+    req.session.user = { id: admin.id, username: admin.username, role: 'admin' };
     res.json({ user: req.session.user });
   });
 });
@@ -243,7 +334,56 @@ app.get('/api/public/manifest.webmanifest', (req, res) => {
 });
 
 app.get('/api/admin/shops', requireLogin, requireAdmin, (req, res) => res.json({ shops: db.shops.map(safeShop) }));
-app.get('/api/admin/settings', requireLogin, requireAdmin, (req, res) => res.json({ settings: { appName: db.settings.appName || 'نوى' } }));
+app.get('/api/admin/settings', requireLogin, requireAdmin, (req, res) => {
+  const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
+  res.json({ settings: { appName: db.settings.appName || 'نوى', twoFactorEnabled: Boolean(admin?.totpSecret) } });
+});
+app.post('/api/admin/password', requireLogin, requireAdmin, async (req, res) => {
+  const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
+  if (!admin || !verifyPassword(String(req.body?.currentPassword || '').slice(0, 128), admin.passwordHash)) return res.status(401).json({ error: 'كلمة المرور الحالية غير صحيحة' });
+  if (admin.totpSecret && !verifyTotp(admin.totpSecret, req.body?.code)) return res.status(401).json({ error: 'أدخل رمز التحقق بخطوتين' });
+  if (!validPassword(req.body?.newPassword)) return res.status(400).json({ error: 'كلمة المرور الجديدة يجب أن تكون من 8 إلى 128 خانة' });
+  admin.passwordHash = hashPassword(req.body.newPassword);
+  admin.authVersion = (admin.authVersion || 0) + 1;
+  await saveDb();
+  req.session.regenerate((err) => {
+    if (err) return res.status(500).json({ error: 'تم تغيير كلمة المرور، سجّل الدخول مجددًا' });
+    req.session.authVersion = admin.authVersion;
+    req.session.user = { id: admin.id, username: admin.username, role: 'admin' };
+    res.json({ ok: true });
+  });
+});
+app.post('/api/admin/2fa/setup', requireLogin, requireAdmin, async (req, res) => {
+  const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
+  if (!admin || !verifyPassword(String(req.body?.currentPassword || '').slice(0, 128), admin.passwordHash)) return res.status(401).json({ error: 'كلمة المرور الحالية غير صحيحة' });
+  if (admin.totpSecret) return res.status(409).json({ error: 'التحقق بخطوتين مفعّل بالفعل' });
+  const secret = base32Encode(crypto.randomBytes(20));
+  req.session.pendingTotpSecret = secret;
+  const label = encodeURIComponent(`${db.settings.appName || 'نوى'}:${admin.username}`);
+  const issuer = encodeURIComponent(db.settings.appName || 'نوى');
+  const uri = `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`;
+  res.json({ secret, qr: await QRCode.toDataURL(uri, { width: 220, margin: 1 }) });
+});
+app.post('/api/admin/2fa/enable', requireLogin, requireAdmin, async (req, res) => {
+  const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
+  const secret = req.session.pendingTotpSecret;
+  if (!admin || !secret || !verifyTotp(secret, req.body?.code)) return res.status(400).json({ error: 'تحقق من الرمز وحاول مجددًا' });
+  admin.totpSecret = secret;
+  admin.authVersion = (admin.authVersion || 0) + 1;
+  delete req.session.pendingTotpSecret;
+  await saveDb();
+  req.session.authVersion = admin.authVersion;
+  res.json({ ok: true });
+});
+app.post('/api/admin/2fa/disable', requireLogin, requireAdmin, async (req, res) => {
+  const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
+  if (!admin?.totpSecret || !verifyPassword(String(req.body?.currentPassword || '').slice(0, 128), admin.passwordHash) || !verifyTotp(admin.totpSecret, req.body?.code)) return res.status(401).json({ error: 'تحقق من كلمة المرور ورمز المصادقة' });
+  delete admin.totpSecret;
+  admin.authVersion = (admin.authVersion || 0) + 1;
+  await saveDb();
+  req.session.authVersion = admin.authVersion;
+  res.json({ ok: true });
+});
 app.patch('/api/admin/settings', requireLogin, requireAdmin, async (req, res) => {
   const appName = cleanText(req.body?.appName, 40);
   if (appName.length < 2) return res.status(400).json({ error: 'اسم الموقع يجب أن يكون حرفين على الأقل' });
@@ -258,7 +398,7 @@ app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
   const reviewUrl = req.body?.reviewUrl ? googleUrl(req.body.reviewUrl) : '';
   const theme = themes.includes(req.body?.theme) ? req.body.theme : 'studio';
   const orderMode = ['catalog','custom'].includes(req.body?.orderMode) ? req.body.orderMode : 'catalog';
-  if (name.length < 2 || !/^[A-Za-z0-9_.-]{3,40}$/.test(username) || password.length < 12 || password.length > 128) return res.status(400).json({ error: 'تحقق من الاسم واسم المستخدم وكلمة المرور (12 خانة على الأقل)' });
+  if (name.length < 2 || !/^[A-Za-z0-9_.-]{3,40}$/.test(username) || !validPassword(password)) return res.status(400).json({ error: 'تحقق من الاسم واسم المستخدم وكلمة المرور (8 خانات على الأقل)' });
   if (db.shops.some((s) => s.username === username) || db.users.some((u) => u.username === username)) return res.status(409).json({ error: 'اسم المستخدم مستخدم من قبل' });
   if (req.body?.reviewUrl && !reviewUrl) return res.status(400).json({ error: 'أدخل رابط Google Maps آمن يبدأ بـ HTTPS' });
   const slug = `${username.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-${crypto.randomBytes(2).toString('hex')}`;
@@ -275,8 +415,9 @@ app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) =
     shop.username = username;
   }
   if (req.body?.password) {
-    if (typeof req.body.password !== 'string' || req.body.password.length < 12 || req.body.password.length > 128) return res.status(400).json({ error: 'كلمة المرور الجديدة يجب أن تكون من 12 إلى 128 خانة' });
+    if (!validPassword(req.body.password)) return res.status(400).json({ error: 'كلمة المرور الجديدة يجب أن تكون من 8 إلى 128 خانة' });
     shop.passwordHash = hashPassword(req.body.password);
+    shop.authVersion = (shop.authVersion || 0) + 1;
   }
   if (req.body?.name !== undefined) shop.name = cleanText(req.body.name, 70) || shop.name;
   if (req.body?.reviewUrl !== undefined) {
@@ -438,7 +579,7 @@ app.get('/api/public/screen/:slug', async (req, res) => {
   const shop = db.shops.find((s) => s.slug === req.params.slug && s.active);
   if (!shop) return res.status(404).json({ error: 'المتجر غير متاح' });
   const active = Date.now() < (shop.screenBannerUntil || 0) ? null : db.orders.find((o) => o.shopId === shop.id && o.status !== 'completed' && !o.scanned);
-  res.json({ shop: publicScreenShop(shop), activeOrder: active ? { number: active.number, status: active.status, statusLabel: statusLabels[active.status], customerName: active.customerName || '', qr: await QRCode.toDataURL(`${appBaseUrl()}/scan/${active.id}`, { width: 240, margin: 1 }) } : null });
+  res.json({ shop: publicScreenShop(shop), activeOrder: active ? { number: active.number, status: active.status, statusLabel: statusLabels[active.status], qr: await QRCode.toDataURL(`${appBaseUrl()}/scan/${active.id}`, { width: 240, margin: 1 }) } : null });
 });
 
 app.get('*all', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));

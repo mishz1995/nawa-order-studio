@@ -1,0 +1,30 @@
+[
+ {
+  "mode": "redesign",
+  "depth": "restyle",
+  "scope": "app",
+  "shape": "kept existing operations dashboard",
+  "theme": "coral",
+  "axes": "light, warm paper, Arabic-first sans, restrained ink",
+  "hero": "current order list remains the primary work area",
+  "nav": "existing admin and shop shell kept",
+  "footer": "none on authenticated app screens",
+  "imagery": "product interface; no stock photography added",
+  "photos": [],
+  "entry": "login and shop order-management screens",
+  "fingerprint": "live order state with store-specific colourways",
+  "sections": [
+   "login",
+   "admin dashboard",
+   "shop orders",
+   "settings",
+   "customer status"
+  ],
+  "signature": "the active order row and its changing status",
+  "waived": [
+   "24b"
+  ],
+  "prompt": "Restyle Nawa order management screens with Hallmark Coral while preserving Arabic operation flows.",
+  "date": "2026-11-23"
+ }
+]
