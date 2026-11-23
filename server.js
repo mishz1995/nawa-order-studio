@@ -258,7 +258,7 @@ app.use('/api', async (req, res, next) => {
 const allShopSections = ['home', 'menu', 'design'];
 const defaultCardColors = { surface: '#ffffff', text: '#22251f', accent: '#c94f3d', border: '#e8e6e1', panel: '#641b2b' };
 const defaultCardStyle = { padding: 16, radius: 28, scale: 100, shadow: 10 };
-const shopCssScopes = { store: '.shell', card: '.customer-ticket', screen: '.signage' };
+const shopCssScopes = { store: ['.shell', '.modal-backdrop', '.direct-chat', '.toast'], card: ['body.customer-page', '.customer-ticket'], screen: ['body.screen-page', '.signage'] };
 const validateShopCssRules = (source, scope) => {
   let index = 0;
   while (index < source.length) {
@@ -279,7 +279,7 @@ const validateShopCssRules = (source, scope) => {
       if (!/^@media\s*\(\s*(?:min|max)-(?:width|height)\s*:\s*\d+(?:px|em|rem|vw|vh)\s*\)$/.test(selectorText) || !validateShopCssRules(declarations, scope)) return false;
     } else {
       const selectors = selectorText.split(',').map((selector) => selector.trim());
-      if (selectorText.startsWith('@') || selectors.some((selector) => !selector.startsWith(scope) || /[\w-]/.test(selector[scope.length] || '')) || declarations.includes('{')) return false;
+      if (selectorText.startsWith('@') || selectors.some((selector) => !scope.some((root) => selector.startsWith(root) && !/[\w-]/.test(selector[root.length] || '')) ) || declarations.includes('{')) return false;
       for (const declaration of declarations.split(';').map((entry) => entry.trim()).filter(Boolean)) {
         const separator = declaration.indexOf(':');
         if (separator < 1 || !/^(?:--[a-z0-9-]+|[a-z-]+)$/i.test(declaration.slice(0, separator).trim())) return false;
@@ -296,8 +296,8 @@ const sanitizeShopCss = (value, surface) => {
   const css = value.replace(/\/\*[\s\S]*?\*\//g, '').trim();
   if (!css) return '';
   if (/url\s*\(|expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding|<\/style|\\/i.test(css)) return null;
-  const scope = shopCssScopes[surface];
-  if (!scope || !validateShopCssRules(css, scope)) return null;
+  const scopes = shopCssScopes[surface];
+  if (!scopes || !validateShopCssRules(css, scopes)) return null;
   return css;
 };
 const safeShopCss = (value) => Object.fromEntries(Object.keys(shopCssScopes).map((surface) => [surface, sanitizeShopCss(value?.[surface] || '', surface) || '']));
