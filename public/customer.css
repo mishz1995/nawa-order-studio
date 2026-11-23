@@ -1,5 +1,6 @@
-/* Hallmark · component: customer order card + signage banner · genre: modern-minimal · theme: Coral · states: n/a · contrast: overlay checked · v2.0.0 */
-/* Picks · retained Coral tokens and store colourways; introduced real cafe photographs, clearer order hierarchy, and a reusable superadmin CSS profile endpoint. */
+/* Hallmark · component: customer card 09 · modern-minimal · states: queued/preparing/ready/completed · contrast checked · v2.0.0 */
+/* Critique · Token-only styling left the scanned customer card visually unchanged; give the ticket a stronger hierarchy. */
+/* Picks · Put order number, status, item, and progress into distinct ticket sections while preserving shop color controls. */
 .customer-photo-banner{position:relative;isolation:isolate;display:flex;align-items:flex-end;min-height:clamp(230px,34vw,360px);overflow:hidden;border:1px solid var(--color-rule);border-radius:var(--radius-card);background:var(--store-ink);color:var(--color-board-type);box-shadow:var(--shadow-card)}
 .customer-photo-banner>img,.signage-photo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:saturate(.65) contrast(.97) sepia(.08)}
 .customer-photo-banner>img{object-position:center 54%}
@@ -9,7 +10,6 @@
 .customer-photo-copy h1{max-width:13ch;margin:12px 0 8px;font-size:clamp(28px,5vw,48px);font-weight:650;line-height:1.14;letter-spacing:-.035em;color:var(--color-board-type);text-wrap:balance}
 .customer-photo-copy p{margin:0;color:color-mix(in oklch,var(--color-board-type) 86%,transparent);font-size:14px;line-height:1.7}
 .customer-card{margin-top:16px;padding:clamp(20px,4vw,32px);border:1px solid var(--customer-card-border,var(--color-rule));border-radius:var(--radius-card);background:var(--customer-card-surface,var(--store-card,var(--color-cotton)));box-shadow:var(--shadow-card);color:var(--customer-card-text,var(--store-ink))}
-.customer-card--09{border-radius:var(--customer-card-radius,28px);font-size:calc(1rem * var(--customer-card-scale,1));box-shadow:0 20px 55px color-mix(in oklch,var(--customer-card-text,var(--store-ink)) var(--customer-card-shadow,10%),transparent)}
 .customer-card .ticket-number,.customer-card h2,.customer-card>.eyebrow,.customer-card .customer-item-copy #orderItem{color:var(--customer-card-text,var(--store-ink))}
 .customer-card .progress-step.done{border-color:var(--customer-card-accent,var(--color-accent-2));color:var(--customer-card-text,var(--store-ink))}
 .customer-card .customer-state-dot,.customer-card>.eyebrow:before{background:var(--customer-card-accent,var(--color-accent))}
@@ -33,7 +33,7 @@
 .check-option input{accent-color:var(--color-accent-2)}
 .chat-launch{position:fixed;z-index:9;bottom:24px;right:24px;display:flex;align-items:center;gap:9px;padding:13px 18px;border:0;border-radius:999px;background:var(--color-ink);color:var(--color-board-type);box-shadow:var(--shadow-card);font:600 13px/1 inherit}
 body[data-disabled-sections~="menu"] [data-page="menu"],body[data-disabled-sections~="design"] [data-page="design"]{display:none!important}
-.direct-chat{position:fixed;z-index:30;right:22px;bottom:78px;width:min(390px,calc(100vw - 28px));height:min(520px,calc(100vh - 110px));display:grid;grid-template-rows:auto 1fr auto;overflow:hidden;border:1px solid var(--color-rule);border-radius:20px;background:var(--color-cotton);color:var(--color-ink);box-shadow:0 20px 60px #17191433;direction:rtl}
+.direct-chat{position:fixed;z-index:30;right:22px;bottom:78px;width:min(390px,calc(100vw - 28px));height:min(520px,calc(100vh - 110px));display:grid;grid-template-rows:auto 1fr auto;overflow:hidden;border:1px solid var(--color-rule);border-radius:20px;background:var(--color-cotton);color:var(--color-ink);box-shadow:0 16px 22px color-mix(in oklch,var(--color-ink) 18%,transparent);direction:rtl}
 .direct-chat>header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--color-rule);color:var(--color-ink)}
 .direct-chat>header strong,.direct-chat>header small{display:block}.direct-chat>header strong{font-size:14px}.direct-chat>header small{margin-top:4px;color:var(--color-muted);font-size:11px}
 .direct-chat-messages{display:flex;flex-direction:column;gap:10px;overflow:auto;padding:13px}
@@ -91,3 +91,19 @@ body[data-disabled-sections~="menu"] [data-page="menu"],body[data-disabled-secti
 .customer-card button:focus-visible,.style-preset-row button:focus-visible{outline:3px solid var(--color-focus);outline-offset:3px}
 .customer-card button:active,.style-preset-row button:active{transform:translateY(1px)}
 @media(max-width:650px){.customer-photo-banner{min-height:240px}.customer-photo-shade{background:linear-gradient(0deg,color-mix(in oklch,var(--color-ink) 78%,transparent),color-mix(in oklch,var(--color-ink) 8%,transparent) 90%)}.customer-photo-copy{padding:20px}.customer-photo-copy h1{font-size:30px}.customer-photo-copy p{font-size:13px}.customer-card{padding:16px}.customer-item-thumb{width:72px;height:68px;flex-basis:72px}.customer-item-summary{gap:12px;padding:8px}.customer-card .progress{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:12px}.brand-copy-grid{grid-template-columns:1fr}.style-preset-row{align-items:flex-start;flex-direction:column}.style-preset-row .row-actions{width:100%;flex-wrap:wrap}.catalog-row{grid-template-columns:46px minmax(0,1fr) auto}.catalog-row .row-actions{grid-column:2/-1}.store-product{grid-template-columns:42px minmax(0,1fr) auto}}
+/* Design 09 · numbered customer ticket with distinct status and progress sections. */
+body .customer-card--09{position:relative;overflow:hidden;padding:0;border:1px solid var(--customer-card-border,var(--color-rule));border-top:5px solid var(--customer-card-accent,var(--color-accent));border-radius:var(--customer-card-radius,28px);background:var(--customer-card-surface,var(--store-card,var(--color-cotton)));font-size:calc(1rem * var(--customer-card-scale,1));box-shadow:0 8px 16px color-mix(in oklch,var(--customer-card-text,var(--store-ink)) var(--customer-card-shadow,10%),transparent)}
+body .customer-card--09>.eyebrow{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0;padding:16px 24px;border:0;border-bottom:2px solid var(--customer-card-accent,var(--color-accent));border-radius:0;background:var(--customer-card-surface,var(--color-cotton));font-size:13px;font-weight:650;color:var(--customer-card-text,var(--store-ink))}
+body .customer-card--09>.eyebrow:before{width:9px;height:9px;flex:0 0 9px;box-shadow:0 0 0 5px color-mix(in oklch,var(--customer-card-accent,var(--color-accent)) 17%,transparent)}
+body .customer-card--09 .ticket{padding:24px}
+body .customer-card--09 .ticket-order-head{margin:0 0 16px;padding:16px 20px;border:1px solid var(--customer-card-border,var(--color-rule));border-inline-start:4px solid var(--customer-card-accent,var(--color-accent));border-radius:16px;background:var(--customer-card-surface,var(--color-cotton))}
+body .customer-card--09 .ticket-order-head .customer-label{margin-bottom:4px;font-size:11px;color:var(--color-muted)}
+body .customer-card--09 .ticket-number{font-size:clamp(52px,10vw,72px);letter-spacing:-.07em;line-height:.98;font-variant-numeric:tabular-nums}
+body .customer-card--09 .customer-state-dot{width:15px;height:15px;box-shadow:0 0 0 6px color-mix(in oklch,var(--customer-card-accent,var(--color-accent)) 17%,transparent)}
+body .customer-card--09 .ticket-content>h2{display:table;margin:0 0 4px;padding:8px 12px;border:1px solid var(--customer-card-accent,var(--color-accent));border-radius:999px;background:var(--customer-card-surface,var(--color-cotton));font-size:clamp(17px,3.5vw,21px);line-height:1.35}
+body .customer-card--09 .customer-item-summary{margin-top:16px;padding:12px;border-color:var(--customer-card-border,var(--color-rule));border-radius:16px;background:var(--customer-card-surface,var(--color-cotton))}
+body .customer-card--09 .customer-item-thumb{width:96px;height:88px;flex-basis:96px;border-radius:12px}
+body .customer-card--09 .progress-step{padding:12px 8px;border:1px solid var(--customer-card-border,var(--color-rule));border-top:3px solid var(--customer-card-border,var(--color-rule));border-radius:12px;background:var(--customer-card-surface,var(--color-cotton));text-align:center}
+body .customer-card--09 .progress-step.done{border-color:var(--customer-card-accent,var(--color-accent));border-top-color:var(--customer-card-accent,var(--color-accent));background:var(--customer-card-surface,var(--color-cotton))}
+body .customer-card--09 .notification-hint{max-width:48ch;margin-inline:auto;text-align:center;line-height:1.65}
+@media(max-width:650px){body .customer-card--09{padding:0}body .customer-card--09 .ticket{padding:16px}body .customer-card--09 .ticket-order-head{padding:16px}body .customer-card--09 .customer-item-thumb{width:72px;height:68px;flex-basis:72px}body .customer-card--09 .progress-step{padding:8px;text-align:start}}
