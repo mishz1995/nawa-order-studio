@@ -1,0 +1,59 @@
+/* Hallmark · component: customer order card + signage banner · genre: modern-minimal · theme: Coral · states: n/a · contrast: overlay checked · v2.0.0 */
+/* Picks · retained Coral tokens and store colourways; introduced real cafe photographs, clearer order hierarchy, and a reusable superadmin CSS profile endpoint. */
+.customer-photo-banner{position:relative;isolation:isolate;display:flex;align-items:flex-end;min-height:clamp(230px,34vw,360px);overflow:hidden;border:1px solid var(--color-rule);border-radius:var(--radius-card);background:var(--store-ink);color:var(--color-board-type);box-shadow:var(--shadow-card)}
+.customer-photo-banner>img,.signage-photo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:saturate(.65) contrast(.97) sepia(.08)}
+.customer-photo-banner>img{object-position:center 54%}
+.customer-photo-shade{position:absolute;z-index:0;inset:0;background:linear-gradient(90deg,color-mix(in oklch,var(--color-ink) 8%,transparent) 0%,color-mix(in oklch,var(--color-ink) 38%,transparent) 48%,color-mix(in oklch,var(--color-ink) 82%,transparent) 100%)}
+.customer-photo-copy{position:relative;z-index:1;max-width:580px;padding:clamp(24px,5vw,48px)}
+.customer-photo-copy .customer-label{display:inline-flex;padding:8px 12px;border:1px solid color-mix(in oklch,var(--color-board-type) 35%,transparent);border-radius:999px;color:var(--color-board-type);background:color-mix(in oklch,var(--color-board) 82%,transparent)}
+.customer-photo-copy h1{max-width:13ch;margin:12px 0 8px;font-size:clamp(28px,5vw,48px);font-weight:650;line-height:1.14;letter-spacing:-.035em;color:var(--color-board-type);text-wrap:balance}
+.customer-photo-copy p{margin:0;color:color-mix(in oklch,var(--color-board-type) 86%,transparent);font-size:14px;line-height:1.7}
+.customer-card{margin-top:16px;padding:clamp(20px,4vw,32px);border:1px solid var(--color-rule);border-radius:var(--radius-card);background:var(--store-card,var(--color-cotton));box-shadow:var(--shadow-card)}
+.customer-card>.eyebrow{display:flex;align-items:center;gap:8px;padding-bottom:16px;border-bottom:1px solid var(--color-rule);font-size:13px;color:var(--store-ink)}
+.customer-card>.eyebrow:before{content:"";width:8px;height:8px;border-radius:50%;background:var(--color-accent);box-shadow:0 0 0 4px color-mix(in oklch,var(--color-accent) 16%,transparent)}
+.ticket{display:block;padding-top:20px}
+.ticket-content{max-width:720px;margin:auto}
+.ticket-order-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:8px}
+.ticket-number{font-size:clamp(44px,9vw,66px);line-height:1.05;font-weight:650;letter-spacing:-.055em;color:var(--store-ink);font-variant-numeric:tabular-nums}
+.customer-state-dot{width:13px;height:13px;flex:none;border-radius:50%;background:var(--color-accent);box-shadow:0 0 0 6px color-mix(in oklch,var(--color-accent) 17%,transparent)}
+.customer-card h2{margin:8px 0 4px;font-size:clamp(20px,4vw,27px);line-height:1.4;letter-spacing:-.025em;color:var(--store-ink);text-wrap:balance}
+.customer-card #orderCustomer{margin:0;color:var(--color-muted);font-size:13px}
+.customer-item-summary{display:flex;align-items:center;gap:16px;margin-top:20px;padding:12px;border:1px solid var(--color-rule);border-radius:var(--radius-card);background:color-mix(in oklch,var(--color-cotton) 76%,var(--store-bg))}
+.customer-item-thumb{width:86px;height:78px;flex:0 0 86px;overflow:hidden;border-radius:calc(var(--radius-card) - 2px);background:var(--color-paper-2)}
+.customer-item-thumb img{display:block;width:100%;height:100%;object-fit:cover;filter:saturate(.65) contrast(.97) sepia(.08)}
+.customer-item-copy{min-width:0}
+.customer-item-copy>span{display:block;margin-bottom:4px;color:var(--color-muted);font-size:11px}
+.customer-item-copy #orderItem{margin:0;color:var(--store-ink);font-size:15px;font-weight:600;line-height:1.5;overflow-wrap:anywhere}
+.customer-item-copy .prep-estimate{margin-top:4px;font-size:12px;color:var(--color-accent-2)}
+.customer-card .progress{margin-top:24px;gap:8px}
+.customer-card .progress-step{position:relative;padding-top:12px;font-size:11px;line-height:1.5}
+.customer-card .progress-step.done{border-color:var(--color-accent-2);color:var(--store-ink)}
+.customer-card .notification-setup{margin-top:20px;min-height:46px}
+.customer-photo-credit{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:12px;color:var(--color-muted);font-size:10px;line-height:1.8}
+.customer-photo-credit a,.signage-foot a{text-decoration:underline;text-underline-offset:3px}
+.customer-photo-credit a:focus-visible,.signage-foot a:focus-visible{outline:2px solid var(--color-focus);outline-offset:3px}
+.signage-banner{isolation:isolate;background:var(--store-ink)}
+.signage-photo{z-index:-1;object-position:center 58%}
+.signage-banner:before{z-index:0;inset:0;width:auto;height:auto;border:0;border-radius:inherit;background:linear-gradient(90deg,color-mix(in oklch,var(--color-ink) 10%,transparent),color-mix(in oklch,var(--color-ink) 63%,transparent))}
+.signage-banner:after{z-index:0;opacity:.55}
+.banner-inner{padding:24px}
+.banner-inner .hero-kicker,.banner-inner h1,.banner-inner p{text-shadow:0 2px 18px color-mix(in oklch,var(--color-ink) 28%,transparent)}
+.signage-foot{flex-wrap:wrap}
+.brand-copy-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.style-editor{min-height:190px;resize:vertical;direction:ltr;text-align:left;font:13px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2}
+.style-preset-list{display:grid;gap:8px}
+.style-preset-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid var(--color-rule);border-radius:var(--radius-card);background:var(--color-cotton)}
+.style-preset-row strong,.style-preset-row small{display:block}
+.style-preset-row strong{font-size:13px}
+.style-preset-row small{margin-top:4px;color:var(--color-muted);font-size:11px}
+.style-preset-row .selected{border-color:var(--color-accent-2);color:var(--color-accent-2)}
+.banner-style-preview,.catalog-image-preview{display:block;width:100%;max-height:210px;aspect-ratio:16/7;object-fit:cover;border:1px solid var(--color-rule);border-radius:var(--radius-card);filter:saturate(.65) contrast(.97) sepia(.08)}
+.catalog-image-preview{max-height:120px;aspect-ratio:4/1}
+.catalog-row{grid-template-columns:52px minmax(0,1fr) auto auto}
+.catalog-row-thumb{width:46px;height:46px;object-fit:cover;border-radius:calc(var(--radius-card) - 2px);filter:saturate(.65) contrast(.97) sepia(.08)}
+.store-product{display:grid;grid-template-columns:48px minmax(0,1fr) auto;justify-content:initial}
+.store-product-thumb{width:44px;height:44px;object-fit:cover;border-radius:10px;filter:saturate(.65) contrast(.97) sepia(.08)}
+.store-product>div:first-of-type{min-width:0}
+.customer-card button:focus-visible,.style-preset-row button:focus-visible{outline:3px solid var(--color-focus);outline-offset:3px}
+.customer-card button:active,.style-preset-row button:active{transform:translateY(1px)}
+@media(max-width:650px){.customer-photo-banner{min-height:240px}.customer-photo-shade{background:linear-gradient(0deg,color-mix(in oklch,var(--color-ink) 78%,transparent),color-mix(in oklch,var(--color-ink) 8%,transparent) 90%)}.customer-photo-copy{padding:20px}.customer-photo-copy h1{font-size:30px}.customer-photo-copy p{font-size:13px}.customer-card{padding:16px}.customer-item-thumb{width:72px;height:68px;flex-basis:72px}.customer-item-summary{gap:12px;padding:8px}.customer-card .progress{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:12px}.brand-copy-grid{grid-template-columns:1fr}.style-preset-row{align-items:flex-start;flex-direction:column}.style-preset-row .row-actions{width:100%;flex-wrap:wrap}.catalog-row{grid-template-columns:46px minmax(0,1fr) auto}.catalog-row .row-actions{grid-column:2/-1}.store-product{grid-template-columns:42px minmax(0,1fr) auto}}

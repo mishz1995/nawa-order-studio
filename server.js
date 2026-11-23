@@ -158,6 +158,11 @@ function normalizeAndSeedDb() {
   let changed = false;
   if (!db.settings || typeof db.settings !== 'object') { db.settings = { appName: 'نوى' }; changed = true; }
   if (typeof db.settings.appName !== 'string' || !db.settings.appName.trim()) { db.settings.appName = 'نوى'; changed = true; }
+  if (!db.settings.branding || typeof db.settings.branding !== 'object') { db.settings.branding = {}; changed = true; }
+  if (!Array.isArray(db.settings.stylePresets)) { db.settings.stylePresets = []; changed = true; }
+  if (typeof db.settings.activeStyleId !== 'string') { db.settings.activeStyleId = ''; changed = true; }
+  if (typeof db.settings.adminDisplayName !== 'string') { db.settings.adminDisplayName = ''; changed = true; }
+  if (!db.settings.textOverrides || typeof db.settings.textOverrides !== 'object' || Array.isArray(db.settings.textOverrides)) { db.settings.textOverrides = {}; changed = true; }
   for (const shop of db.shops) {
     if (!['catalog', 'custom'].includes(shop.orderMode)) { shop.orderMode = 'catalog'; changed = true; }
     if (!Array.isArray(shop.items)) {
@@ -171,6 +176,7 @@ function normalizeAndSeedDb() {
       ];
       changed = true;
     }
+    for (const entry of shop.items) if (!catalogImages.includes(entry.image)) { entry.image = productImage(entry.name, entry.category); changed = true; }
   }
   if (!db.users.some((user) => user.role === 'admin')) {
     db.users.push({ id: crypto.randomUUID(), username: process.env.BOOTSTRAP_ADMIN_USERNAME, passwordHash: hashPassword(process.env.BOOTSTRAP_ADMIN_PASSWORD), role: 'admin' });
@@ -203,7 +209,7 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(express.json({ limit: '20kb' }));
+app.use(express.json({ limit: '128kb' }));
 const sessionOptions = {
   name: 'nawa.sid',
   secret: process.env.SESSION_SECRET,
@@ -244,7 +250,7 @@ app.use('/api', async (req, res, next) => {
 });
 const safeShop = (shop) => ({ id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, createdAt: shop.createdAt });
 const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, bannerText: shop.bannerText });
-const sanitizeItem = (item) => ({ id: item.id, name: item.name, category: item.category, prepMinutes: item.prepMinutes, active: item.active !== false });
+const sanitizeItem = (item) => ({ id: item.id, name: item.name, category: item.category, prepMinutes: item.prepMinutes, image: catalogImages.includes(item.image) ? item.image : productImage(item.name,item.category), active: item.active !== false });
 const safeOrder = (order) => { const { pushSubscriptions, ...visible } = order; return visible; };
 async function manageShopItems(shop, req, res) {
   const items = shop.items || (shop.items = []);
@@ -254,7 +260,8 @@ async function manageShopItems(shop, req, res) {
     const category = cleanText(req.body?.category, 35) || 'أخرى';
     const prepMinutes = Number(req.body?.prepMinutes);
     if (name.length < 2 || !Number.isInteger(prepMinutes) || prepMinutes < 1 || prepMinutes > 180) return res.status(400).json({ error: 'أدخل اسم الصنف ومدة تحضير من 1 إلى 180 دقيقة' });
-    const item = { id: crypto.randomUUID(), name, category, prepMinutes, active: true };
+    const image = catalogImages.includes(req.body?.image) ? req.body.image : productImage(name,category);
+    const item = { id: crypto.randomUUID(), name, category, prepMinutes, image, active: true };
     items.push(item); await saveDb(); return res.status(201).json({ item: sanitizeItem(item) });
   }
   const item = items.find((entry) => entry.id === req.params.itemId);
@@ -263,6 +270,7 @@ async function manageShopItems(shop, req, res) {
     if (req.body?.name !== undefined) { const name = cleanText(req.body.name, 70); if (name.length < 2) return res.status(400).json({ error: 'اسم الصنف قصير' }); item.name = name; }
     if (req.body?.category !== undefined) item.category = cleanText(req.body.category, 35) || 'أخرى';
     if (req.body?.prepMinutes !== undefined) { const time = Number(req.body.prepMinutes); if (!Number.isInteger(time) || time < 1 || time > 180) return res.status(400).json({ error: 'مدة التحضير يجب أن تكون من 1 إلى 180 دقيقة' }); item.prepMinutes = time; }
+    if (req.body?.image !== undefined) { if (!catalogImages.includes(req.body.image)) return res.status(400).json({ error: 'اختر صورة من الصور المتاحة' }); item.image = req.body.image; }
     if (req.body?.active !== undefined) item.active = !!req.body.active;
     await saveDb(); return res.json({ item: sanitizeItem(item) });
   }
@@ -310,7 +318,7 @@ app.post('/api/auth/login', (req, res) => {
     }
     req.session.authVersion = account.authVersion || 0;
     req.session.user = account.role === 'admin' ? { id: account.id, username: account.username, role: 'admin' } : { id: account.id, username: account.username, role: 'shop', shopId: account.shopId, name: account.name, slug: account.slug, theme: account.theme, bannerText: account.bannerText };
-    res.json({ user: req.session.user });
+    res.json({ user: account.role === 'admin' ? { ...req.session.user, displayName: db.settings.adminDisplayName || '' } : req.session.user });
   });
 });
 app.post('/api/auth/verify-2fa', (req, res) => {
@@ -320,13 +328,28 @@ app.post('/api/auth/verify-2fa', (req, res) => {
     if (err) return res.status(500).json({ error: 'تعذر بدء الجلسة' });
     req.session.authVersion = admin.authVersion || 0;
     req.session.user = { id: admin.id, username: admin.username, role: 'admin' };
-    res.json({ user: req.session.user });
+    res.json({ user: { ...req.session.user, displayName: db.settings.adminDisplayName || '' } });
   });
 });
 app.post('/api/auth/logout', requireLogin, (req, res) => req.session.destroy(() => res.json({ ok: true })));
-app.get('/api/auth/me', (req, res) => res.json({ user: req.session.user || null }));
+app.get('/api/auth/me', (req, res) => { const user = req.session.user; res.json({ user: user ? (user.role === 'admin' ? { ...user, displayName: db.settings.adminDisplayName || '' } : user) : null }); });
 app.get('/healthz', (req, res) => res.json({ ok: true }));
-app.get('/api/public/settings', (req, res) => res.json({ settings: { appName: db.settings.appName || 'نوى' } }));
+const bannerImages = ['/images/customer/almond-croissant-workshop-coffee-lab-2025-06-27-1920.jpg','/images/customer/espresso-coffee-01-1920.jpg','/images/customer/gray-espresso-cup-with-amaretto-1-1920.jpg'];
+const catalogImages = bannerImages;
+const productImage = (name='', category='') => { const text=`${name} ${category}`.toLowerCase(); return text.includes('كرواسون')||text.includes('مخبوز')||text.includes('pastry')||text.includes('croissant')?catalogImages[0]:text.includes('قهوة')||text.includes('لاتيه')||text.includes('كابتشينو')||text.includes('اسبريسو')||text.includes('coffee')||text.includes('espresso')?catalogImages[1]:catalogImages[2]; };
+const defaultBranding = { adminBrandTag: 'SUPER ADMIN / FULL ACCESS', shopBrandTag: 'ORDER CONTROL / STORE', customerBrandTag: 'ORDER / LIVE', screenBrandTag: 'ORDER SCREEN', workspaceLabel: 'WORKSPACE', adminFooter: 'سوبر أدمن · كامل الصلاحيات', shopFooter: 'إدارة الطلبات اليومية', workLabel: 'لوحة العمل', loginBrandTag: 'NAWA / ORDER STUDIO · RIYADH', loginHeadline: 'طلباتك، بإيقاع أفضل. من أول مسح.', loginIntro: 'مساحة هادئة لإدارة متجرك ومتابعة كل طلب حتى لحظة الاستلام.', customerBannerTitle: 'تجربة هادئة، حتى أول رشفة.', customerBannerCopy: 'تابع حالة طلبك مباشرة من هنا.', screenInstructions: 'امسح رمز طلبك لمتابعة حالته', brandMark: 'ن', bannerImage: bannerImages[0] };
+const publicBranding = () => {
+  const branding = { ...defaultBranding, ...(db.settings.branding || {}) };
+  if (!bannerImages.includes(branding.bannerImage)) branding.bannerImage = defaultBranding.bannerImage;
+  return branding;
+};
+app.get('/api/public/settings', (req, res) => res.json({ settings: { appName: db.settings.appName || 'نوى', branding: publicBranding(), textOverrides: db.settings.textOverrides || {} } }));
+app.get('/api/public/custom-style.css', (req, res) => {
+  const preset = (db.settings.stylePresets || []).find((style) => style.id === db.settings.activeStyleId);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.type('text/css').send(preset?.css || '/* No custom style is active. */');
+});
 app.get('/api/public/manifest.webmanifest', (req, res) => {
   const appName = db.settings.appName || 'نوى';
   res.setHeader('Cache-Control', 'no-store');
@@ -336,7 +359,7 @@ app.get('/api/public/manifest.webmanifest', (req, res) => {
 app.get('/api/admin/shops', requireLogin, requireAdmin, (req, res) => res.json({ shops: db.shops.map(safeShop) }));
 app.get('/api/admin/settings', requireLogin, requireAdmin, (req, res) => {
   const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
-  res.json({ settings: { appName: db.settings.appName || 'نوى', twoFactorEnabled: Boolean(admin?.totpSecret) } });
+  res.json({ settings: { appName: db.settings.appName || 'نوى', adminDisplayName: db.settings.adminDisplayName || '', branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '', twoFactorEnabled: Boolean(admin?.totpSecret) } });
 });
 app.post('/api/admin/password', requireLogin, requireAdmin, async (req, res) => {
   const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
@@ -385,11 +408,51 @@ app.post('/api/admin/2fa/disable', requireLogin, requireAdmin, async (req, res) 
   res.json({ ok: true });
 });
 app.patch('/api/admin/settings', requireLogin, requireAdmin, async (req, res) => {
-  const appName = cleanText(req.body?.appName, 40);
-  if (appName.length < 2) return res.status(400).json({ error: 'اسم الموقع يجب أن يكون حرفين على الأقل' });
+  const appName = req.body?.appName === undefined ? db.settings.appName : cleanText(req.body.appName, 40);
+  if (typeof appName !== 'string' || appName.length < 2) return res.status(400).json({ error: 'اسم الموقع يجب أن يكون حرفين على الأقل' });
   db.settings.appName = appName;
+  if (req.body?.adminDisplayName !== undefined) db.settings.adminDisplayName = cleanText(req.body.adminDisplayName, 60);
+  if (req.body?.textOverrides !== undefined) {
+    const overrides = req.body.textOverrides;
+    if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides) || Object.keys(overrides).length > 200) return res.status(400).json({ error: 'تحقق من تعديلات النصوص؛ الحد الأقصى 200 عبارة' });
+    const safeOverrides = {};
+    for (const [source, replacement] of Object.entries(overrides)) {
+      const key = cleanText(source, 120), value = cleanText(replacement, 120);
+      if (!key || !value) return res.status(400).json({ error: 'النص الأصلي والبديل مطلوبان وبحد أقصى 120 حرفًا' });
+      safeOverrides[key] = value;
+    }
+    db.settings.textOverrides = safeOverrides;
+  }
+  if (req.body?.branding && typeof req.body.branding === 'object' && !Array.isArray(req.body.branding)) {
+    const next = { ...publicBranding() };
+    for (const key of Object.keys(defaultBranding)) if (req.body.branding[key] !== undefined) {
+      if (key === 'bannerImage') { if (!bannerImages.includes(req.body.branding[key])) return res.status(400).json({ error: 'اختر صورة بنر من الصور المتاحة' }); next[key] = req.body.branding[key]; }
+      else if (key === 'brandMark') { const mark = cleanText(req.body.branding[key], 3); if (!mark) return res.status(400).json({ error: 'رمز الشعار لا يمكن أن يكون فارغًا' }); next[key] = mark; }
+      else next[key] = cleanText(req.body.branding[key], 60);
+    }
+    db.settings.branding = next;
+  }
+  if (req.body?.stylePresets !== undefined) {
+    if (!Array.isArray(req.body.stylePresets) || req.body.stylePresets.length > 8) return res.status(400).json({ error: 'يمكن حفظ 8 ستايلات كحد أقصى' });
+    const styles = [];
+    let totalCssBytes = 0;
+    for (const raw of req.body.stylePresets) {
+      const name = cleanText(raw?.name, 40);
+      const css = typeof raw?.css === 'string' ? raw.css : '';
+      const id = typeof raw?.id === 'string' && /^[a-z0-9-]{1,40}$/.test(raw.id) ? raw.id : '';
+      if (!id || name.length < 2 || css.length > 12000 || /@import|url\s*\(|expression\s*\(|javascript\s*:|behavior\s*:|<\/style/i.test(css)) return res.status(400).json({ error: 'تحقق من اسم الستايل ومحتوى CSS؛ الروابط والاستيراد غير مسموحين' });
+      totalCssBytes += Buffer.byteLength(css, 'utf8');
+      if (totalCssBytes > 90000) return res.status(400).json({ error: 'إجمالي حجم ملفات الستايل يتجاوز 90KB' });
+      styles.push({ id, name, css });
+    }
+    if (new Set(styles.map((style) => style.id)).size !== styles.length) return res.status(400).json({ error: 'معرّف الستايل مكرر' });
+    const activeStyleId = typeof req.body.activeStyleId === 'string' ? req.body.activeStyleId : '';
+    if (activeStyleId && !styles.some((style) => style.id === activeStyleId)) return res.status(400).json({ error: 'الستايل النشط غير موجود' });
+    db.settings.stylePresets = styles;
+    db.settings.activeStyleId = activeStyleId;
+  }
   await saveDb();
-  res.json({ settings: { appName } });
+  res.json({ settings: { appName, adminDisplayName: db.settings.adminDisplayName || '', branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '' } });
 });
 app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
   const name = cleanText(req.body?.name, 70);
@@ -471,7 +534,7 @@ async function createOrderForShop(shop, body, res) {
     }
     items = [...quantities].map(([id, quantity]) => {
       const entry = (shop.items || []).find((candidate) => candidate.id === id && candidate.active !== false);
-      return entry ? { id: entry.id, name: entry.name, category: entry.category, prepMinutes: entry.prepMinutes, quantity } : null;
+      return entry ? { id: entry.id, name: entry.name, category: entry.category, prepMinutes: entry.prepMinutes, image: catalogImages.includes(entry.image) ? entry.image : productImage(entry.name,entry.category), quantity } : null;
     });
     if (items.some((entry) => !entry)) return res.status(400).json({ error: 'أحد الأصناف لم يعد متاحًا، حدّث القائمة وحاول مجددًا' });
     prepMinutes = Math.min(180, items.reduce((sum, entry) => sum + entry.prepMinutes * entry.quantity, 0));
@@ -546,7 +609,7 @@ app.get('/api/public/orders/:id', async (req, res) => {
   if (!order) return res.status(404).json({ error: 'الطلب غير موجود' });
   if (!order.scanned) return res.status(403).json({ error: 'امسح رمز الطلب المعروض على شاشة المتجر لعرض بطاقة الحالة' });
   const shop = db.shops.find((s) => s.id === order.shopId);
-  res.json({ order: { id: order.id, number: order.number, customerName: order.customerName || '', item: order.item, items: order.items || [], prepMinutes: order.prepMinutes || 0, status: order.status, statusLabel: statusLabels[order.status], updatedAt: order.updatedAt }, shop: { name: shop?.name || '', reviewUrl: order.status === 'completed' ? shop?.reviewUrl || '' : '', theme: shop?.theme || 'studio' } });
+  res.json({ order: { id: order.id, number: order.number, customerName: order.customerName || '', item: order.item, items: order.items || [], prepMinutes: order.prepMinutes || 0, status: order.status, statusLabel: statusLabels[order.status], updatedAt: order.updatedAt }, shop: { name: shop?.name || '', bannerText: shop?.bannerText || '', reviewUrl: order.status === 'completed' ? shop?.reviewUrl || '' : '', theme: shop?.theme || 'studio' } });
 });
 app.get('/scan/:id', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
