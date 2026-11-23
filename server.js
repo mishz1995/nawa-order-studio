@@ -423,10 +423,11 @@ app.get('/healthz', (req, res) => res.json({ ok: true }));
 const bannerImages = ['/images/customer/almond-croissant-workshop-coffee-lab-2025-06-27-1920.jpg','/images/customer/espresso-coffee-01-1920.jpg','/images/customer/gray-espresso-cup-with-amaretto-1-1920.jpg'];
 const catalogImages = bannerImages;
 const productImage = (name='', category='') => { const text=`${name} ${category}`.toLowerCase(); return text.includes('كرواسون')||text.includes('مخبوز')||text.includes('pastry')||text.includes('croissant')?catalogImages[0]:text.includes('قهوة')||text.includes('لاتيه')||text.includes('كابتشينو')||text.includes('اسبريسو')||text.includes('coffee')||text.includes('espresso')?catalogImages[1]:catalogImages[2]; };
-const defaultBranding = { adminBrandTag: 'SUPER ADMIN / FULL ACCESS', shopBrandTag: 'ORDER CONTROL / STORE', customerBrandTag: 'ORDER / LIVE', screenBrandTag: 'ORDER SCREEN', workspaceLabel: 'WORKSPACE', adminFooter: 'سوبر أدمن · كامل الصلاحيات', shopFooter: 'إدارة الطلبات اليومية', workLabel: 'لوحة العمل', loginBrandTag: 'NAWA / ORDER STUDIO · RIYADH', loginHeadline: 'طلباتك، بإيقاع أفضل. من أول مسح.', loginIntro: 'مساحة هادئة لإدارة متجرك ومتابعة كل طلب حتى لحظة الاستلام.', customerBannerTitle: 'تجربة هادئة، حتى أول رشفة.', customerBannerCopy: 'تابع حالة طلبك مباشرة من هنا.', screenInstructions: 'امسح رمز طلبك لمتابعة حالته', brandMark: 'ن', bannerImage: bannerImages[0] };
+const defaultBranding = { adminBrandTag: 'SUPER ADMIN / FULL ACCESS', shopBrandTag: 'ORDER CONTROL / STORE', customerBrandTag: 'ORDER / LIVE', screenBrandTag: 'ORDER SCREEN', workspaceLabel: 'WORKSPACE', adminFooter: 'سوبر أدمن · كامل الصلاحيات', shopFooter: 'إدارة الطلبات اليومية', workLabel: 'لوحة العمل', loginBrandTag: 'NAWA / ORDER STUDIO · RIYADH', loginHeadline: 'طلباتك، بإيقاع أفضل. من أول مسح.', loginIntro: 'مساحة هادئة لإدارة متجرك ومتابعة كل طلب حتى لحظة الاستلام.', customerBannerTitle: 'تجربة هادئة، حتى أول رشفة.', customerBannerCopy: 'تابع حالة طلبك مباشرة من هنا.', screenInstructions: 'امسح رمز طلبك لمتابعة حالته', brandMark: 'ن', appIcon: '', bannerImage: bannerImages[0] };
 const publicBranding = () => {
   const branding = { ...defaultBranding, ...(db.settings.branding || {}) };
   if (!bannerImages.includes(branding.bannerImage)) branding.bannerImage = defaultBranding.bannerImage;
+  branding.appIcon = safeImage(branding.appIcon);
   return branding;
 };
 app.get('/api/public/settings', (req, res) => res.json({ settings: { appName: db.settings.appName || 'نوى', branding: publicBranding(), textOverrides: db.settings.textOverrides || {} } }));
@@ -521,6 +522,7 @@ app.patch('/api/admin/settings', requireLogin, requireAdmin, async (req, res) =>
     const next = { ...publicBranding() };
     for (const key of Object.keys(defaultBranding)) if (req.body.branding[key] !== undefined) {
       if (key === 'bannerImage') { if (!bannerImages.includes(req.body.branding[key])) return res.status(400).json({ error: 'اختر صورة بنر من الصور المتاحة' }); next[key] = req.body.branding[key]; }
+      else if (key === 'appIcon') { const icon = req.body.branding[key] === '' ? '' : safeImage(req.body.branding[key]); if (req.body.branding[key] && !icon) return res.status(400).json({ error: 'أيقونة التطبيق غير صالحة أو تتجاوز الحجم المسموح' }); next[key] = icon; }
       else if (key === 'brandMark') { const mark = cleanText(req.body.branding[key], 3); if (!mark) return res.status(400).json({ error: 'رمز الشعار لا يمكن أن يكون فارغًا' }); next[key] = mark; }
       else next[key] = cleanText(req.body.branding[key], 60);
     }
