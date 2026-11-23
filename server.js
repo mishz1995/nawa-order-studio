@@ -447,8 +447,10 @@ app.get('/api/public/shop-style.css/:slug/:surface', (req, res) => {
 });
 app.get('/api/public/manifest.webmanifest', (req, res) => {
   const appName = db.settings.appName || 'نوى';
+  const appIcon = publicBranding().appIcon;
+  const icon = appIcon ? { src: appIcon, sizes: '512x512', type: appIcon.slice(5, appIcon.indexOf(';')), purpose: 'any' } : { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' };
   res.setHeader('Cache-Control', 'no-store');
-  res.type('application/manifest+json').json({ id: '/', name: appName, short_name: appName.slice(0, 12), lang: 'ar', dir: 'rtl', start_url: '/', scope: '/', display: 'standalone', background_color: '#f6f6f3', theme_color: '#171914', icons: [{ src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }] });
+  res.type('application/manifest+json').json({ id: '/', name: appName, short_name: appName.slice(0, 12), lang: 'ar', dir: 'rtl', start_url: '/', scope: '/', display: 'standalone', background_color: '#f6f6f3', theme_color: '#171914', icons: [icon] });
 });
 
 app.get('/api/admin/shops', requireLogin, requireAdmin, (req, res) => res.json({ shops: db.shops.map(safeShop) }));

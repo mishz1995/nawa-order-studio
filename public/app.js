@@ -69,7 +69,16 @@ function attachThemeCards(root=document) {
   }));
 }
 function brandLogo(){return siteIcon?`<img class="brand-mark app-brand-image" src="${esc(siteIcon)}" alt="">`:`<span class="brand-mark">${esc(brandCopy.brandMark)}</span>`;}
-function syncPlatformIcon(){document.querySelectorAll('.brand').forEach(container=>{const current=container.querySelector('.brand-mark.app-brand-image,.brand-mark');if(!current||container.querySelector('.brand-shop-icon'))return;const next=document.createElement(siteIcon?'img':'span');next.className=siteIcon?'brand-mark app-brand-image':'brand-mark';if(siteIcon){next.src=siteIcon;next.alt='';}else next.textContent=brandCopy.brandMark;current.replaceWith(next);const title=container.querySelector(':scope > span:not(.brand-mark)');if(title?.firstChild?.nodeType===Node.TEXT_NODE)title.firstChild.textContent=siteName;});const avatar=document.querySelector('.avatar');if(avatar)avatar.innerHTML=siteIcon?`<img class="app-avatar-image" src="${esc(siteIcon)}" alt="">`:esc(brandCopy.brandMark);}
+function syncSiteIdentity(){
+  document.title=`${siteName} | إدارة الطلبات`;
+  const description=document.querySelector('meta[name="description"]');if(description)description.content=`${siteName} لإدارة الطلبات ومتابعتها.`;
+  const iconHref=siteIcon||'/icon.svg';
+  for(const selector of ['link[rel="icon"]','link[rel="apple-touch-icon"]']){
+    let link=document.querySelector(selector);if(!link){link=document.createElement('link');link.rel=selector.includes('apple')?'apple-touch-icon':'icon';document.head.append(link);}link.href=iconHref;
+  }
+  const boot=document.querySelector('.boot');if(boot){boot.innerHTML=`${brandLogo()}<span>${esc(siteName)}</span>`;}
+}
+function syncPlatformIcon(){syncSiteIdentity();document.querySelectorAll('.brand').forEach(container=>{const current=container.querySelector('.brand-mark.app-brand-image,.brand-mark');if(!current||container.querySelector('.brand-shop-icon'))return;const next=document.createElement(siteIcon?'img':'span');next.className=siteIcon?'brand-mark app-brand-image':'brand-mark';if(siteIcon){next.src=siteIcon;next.alt='';}else next.textContent=brandCopy.brandMark;current.replaceWith(next);const title=container.querySelector(':scope > span:not(.brand-mark)');if(title?.firstChild?.nodeType===Node.TEXT_NODE)title.firstChild.textContent=siteName;});const avatar=document.querySelector('.avatar');if(avatar)avatar.innerHTML=siteIcon?`<img class="app-avatar-image" src="${esc(siteIcon)}" alt="">`:esc(brandCopy.brandMark);}
 function platformBrand(tag=brandCopy.adminBrandTag){return `<div class="brand">${brandLogo()}<span>${esc(siteName)}${tag?`<small>${esc(tag)}</small>`:''}</span></div>`;}
 function brand(admin=false) {
   if(!admin){const shop=window.storeInfo||{},logo=shop.iconImage?`<img class="brand-shop-icon" src="${esc(shop.iconImage)}" alt="">`:'';return `<div class="brand">${logo}<span>${esc(shop.name||'المتجر')}</span></div>`;}
@@ -326,7 +335,7 @@ async function screenPage(slug){
 }
 async function boot(){
   const [,userData,publicSettings]=await Promise.all([document.fonts?.ready||Promise.resolve(),api('/api/auth/me').catch(()=>({user:null})),api('/api/public/settings').catch(()=>({settings:{appName:'نوى'}}))]);
-  siteName=publicSettings.settings?.appName||'نوى';brandCopy={...defaultBrandCopy,...publicSettings.settings?.branding};siteIcon=brandCopy.appIcon||'';textOverrides=publicSettings.settings?.textOverrides||{};document.title=`${siteName} | إدارة الطلبات`;
+  siteName=publicSettings.settings?.appName||'نوى';brandCopy={...defaultBrandCopy,...publicSettings.settings?.branding};siteIcon=brandCopy.appIcon||'';textOverrides=publicSettings.settings?.textOverrides||{};syncSiteIdentity();
   if(!document.getElementById('customStyleLink')){const styleLink=document.createElement('link');styleLink.id='customStyleLink';styleLink.rel='stylesheet';styleLink.href=`/api/public/custom-style.css?rev=${Date.now()}`;document.head.append(styleLink);}
   applyTextOverrides();if(!window.__nawaCopyObserver){window.__nawaCopyObserver=new MutationObserver(()=>applyTextOverrides());window.__nawaCopyObserver.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['aria-label','title','placeholder','alt']});}
   const p=location.pathname.split('/').filter(Boolean);
