@@ -33,10 +33,10 @@
 .customer-photo-credit a,.signage-foot a{text-decoration:underline;text-underline-offset:3px}
 .customer-photo-credit a:focus-visible,.signage-foot a:focus-visible{outline:2px solid var(--color-focus);outline-offset:3px}
 .signage-banner{isolation:isolate;background:var(--store-ink)}
-.signage-photo{z-index:-1;object-position:center 58%}
-.signage-banner:before{z-index:0;inset:0;width:auto;height:auto;border:0;border-radius:inherit;background:linear-gradient(90deg,color-mix(in oklch,var(--color-ink) 10%,transparent),color-mix(in oklch,var(--color-ink) 63%,transparent))}
-.signage-banner:after{z-index:0;opacity:.55}
-.banner-inner{padding:24px}
+.signage-photo{z-index:0;object-position:center 58%}
+.signage-banner:before{z-index:1;inset:0;width:auto;height:auto;border:0;border-radius:inherit;background:linear-gradient(90deg,color-mix(in oklch,var(--color-ink) 10%,transparent),color-mix(in oklch,var(--color-ink) 63%,transparent))}
+.signage-banner:after{z-index:1;opacity:.55}
+.banner-inner{z-index:2;padding:24px}
 .banner-inner .hero-kicker,.banner-inner h1,.banner-inner p{text-shadow:0 2px 18px color-mix(in oklch,var(--color-ink) 28%,transparent)}
 .signage-foot{flex-wrap:wrap}
 .brand-copy-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
