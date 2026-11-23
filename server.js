@@ -165,6 +165,8 @@ function normalizeAndSeedDb() {
   if (!db.settings.textOverrides || typeof db.settings.textOverrides !== 'object' || Array.isArray(db.settings.textOverrides)) { db.settings.textOverrides = {}; changed = true; }
   for (const shop of db.shops) {
     if (!Array.isArray(shop.visibleSections)) { shop.visibleSections = [...allShopSections]; changed = true; }
+    if (typeof shop.chatEnabled !== 'boolean') { shop.chatEnabled = true; changed = true; }
+    if (!shop.customCss || typeof shop.customCss !== 'object') { shop.customCss = { store: '', card: '', screen: '' }; changed = true; }
     if (!shop.cardColors || typeof shop.cardColors !== 'object') { shop.cardColors = { ...defaultCardColors }; changed = true; }
     if (!shop.cardStyle || typeof shop.cardStyle !== 'object') { shop.cardStyle = { ...defaultCardStyle }; changed = true; }
     if (typeof shop.bannerImage !== 'string') { shop.bannerImage = ''; changed = true; }
@@ -255,7 +257,60 @@ app.use('/api', async (req, res, next) => {
 });
 const allShopSections = ['home', 'menu', 'design'];
 const defaultCardColors = { surface: '#ffffff', text: '#22251f', accent: '#c94f3d', border: '#e8e6e1', panel: '#641b2b' };
-const defaultCardStyle = { width: 440, height: 640, padding: 16, outerPadding: 16, radius: 28, scale: 100, shadow: 10 };
+const defaultCardStyle = { padding: 16, radius: 28, scale: 100, shadow: 10 };
+const shopCssScopes = { store: '.shell', card: '.customer-ticket', screen: '.signage' };
+const validateShopCssRules = (source, scope) => {
+  let index = 0;
+  while (index < source.length) {
+    while (/\s/.test(source[index] || '') || source.startsWith(';', index)) index++;
+    if (index >= source.length) return true;
+    const open = source.indexOf('{', index);
+    if (open < 0) return false;
+    const selectorText = source.slice(index, open).trim();
+    if (!selectorText) return false;
+    let depth = 1, close = open + 1;
+    for (; close < source.length && depth; close++) {
+      if (source[close] === '{') depth++;
+      if (source[close] === '}') depth--;
+    }
+    if (depth) return false;
+    const declarations = source.slice(open + 1, close - 1);
+    if (selectorText.startsWith('@media ')) {
+      if (!/^@media\s*\(\s*(?:min|max)-(?:width|height)\s*:\s*\d+(?:px|em|rem|vw|vh)\s*\)$/.test(selectorText) || !validateShopCssRules(declarations, scope)) return false;
+    } else {
+      const selectors = selectorText.split(',').map((selector) => selector.trim());
+      if (selectorText.startsWith('@') || selectors.some((selector) => !selector.startsWith(scope) || /[\w-]/.test(selector[scope.length] || '')) || declarations.includes('{')) return false;
+      for (const declaration of declarations.split(';').map((entry) => entry.trim()).filter(Boolean)) {
+        const separator = declaration.indexOf(':');
+        if (separator < 1 || !/^(?:--[a-z0-9-]+|[a-z-]+)$/i.test(declaration.slice(0, separator).trim())) return false;
+        const value = declaration.slice(separator + 1).trim();
+        if (!value || /url\s*\(|expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding|[{}]/i.test(value)) return false;
+      }
+    }
+    index = close;
+  }
+  return true;
+};
+const sanitizeShopCss = (value, surface) => {
+  if (typeof value !== 'string' || value.length > 12000) return null;
+  const css = value.replace(/\/\*[\s\S]*?\*\//g, '').trim();
+  if (!css) return '';
+  if (/url\s*\(|expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding|<\/style|\\/i.test(css)) return null;
+  const scope = shopCssScopes[surface];
+  if (!scope || !validateShopCssRules(css, scope)) return null;
+  return css;
+};
+const safeShopCss = (value) => Object.fromEntries(Object.keys(shopCssScopes).map((surface) => [surface, sanitizeShopCss(value?.[surface] || '', surface) || '']));
+const sanitizeShopCssSet = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some((key) => !Object.hasOwn(shopCssScopes, key))) return null;
+  const result = {};
+  for (const surface of Object.keys(shopCssScopes)) {
+    const css = sanitizeShopCss(value[surface] ?? '', surface);
+    if (css === null) return null;
+    result[surface] = css;
+  }
+  return result;
+};
 const safeImage = (value) => typeof value === 'string' && value.length <= 1_500_000 && /^data:image\/(?:webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : '';
 const shopSections = (shop) => Array.isArray(shop.visibleSections) ? shop.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections];
 const safeColors = (value) => Object.fromEntries(Object.entries(defaultCardColors).map(([key, fallback]) => [key, typeof value?.[key] === 'string' && /^#[0-9a-f]{6}$/i.test(value[key]) ? value[key] : fallback]));
@@ -275,8 +330,8 @@ const subscriptionDaysRemaining = (shop, now = Date.now()) => {
   return expiresAt === null ? null : Math.max(0, Math.ceil((expiresAt - now) / 86_400_000));
 };
 const subscriptionExpired = (shop, now = Date.now()) => subscriptionDaysRemaining(shop, now) === 0;
-const safeCardStyle = (value) => ({ width: Number.isInteger(value?.width) && value.width >= 320 && value.width <= 640 ? value.width : defaultCardStyle.width, height: Number.isInteger(value?.height) && value.height >= 480 && value.height <= 900 ? value.height : defaultCardStyle.height, padding: Number.isInteger(value?.padding) && value.padding >= 0 && value.padding <= 48 ? value.padding : defaultCardStyle.padding, outerPadding: Number.isInteger(value?.outerPadding) && value.outerPadding >= 0 && value.outerPadding <= 48 ? value.outerPadding : defaultCardStyle.outerPadding, radius: Number.isInteger(value?.radius) && value.radius >= 14 && value.radius <= 40 ? value.radius : defaultCardStyle.radius, scale: Number.isInteger(value?.scale) && value.scale >= 90 && value.scale <= 115 ? value.scale : defaultCardStyle.scale, shadow: Number.isInteger(value?.shadow) && value.shadow >= 0 && value.shadow <= 30 ? value.shadow : defaultCardStyle.shadow });
-const safeShop = (shop) => { const remaining = subscriptionDaysRemaining(shop); const expired = remaining === 0; return { id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active && !expired, subscriptionEndDate: validSubscriptionDate(shop.subscriptionEndDate) ? shop.subscriptionEndDate : '', subscriptionDaysRemaining: remaining, subscriptionExpired: expired, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), cardColors: safeColors(shop.cardColors), cardStyle: safeCardStyle(shop.cardStyle), visibleSections: shopSections(shop), createdAt: shop.createdAt }; };
+const safeCardStyle = (value) => ({ padding: Number.isInteger(value?.padding) && value.padding >= 0 && value.padding <= 48 ? value.padding : defaultCardStyle.padding, radius: Number.isInteger(value?.radius) && value.radius >= 14 && value.radius <= 40 ? value.radius : defaultCardStyle.radius, scale: Number.isInteger(value?.scale) && value.scale >= 90 && value.scale <= 115 ? value.scale : defaultCardStyle.scale, shadow: Number.isInteger(value?.shadow) && value.shadow >= 0 && value.shadow <= 30 ? value.shadow : defaultCardStyle.shadow });
+const safeShop = (shop) => { const remaining = subscriptionDaysRemaining(shop); const expired = remaining === 0; return { id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active && !expired, subscriptionEndDate: validSubscriptionDate(shop.subscriptionEndDate) ? shop.subscriptionEndDate : '', subscriptionDaysRemaining: remaining, subscriptionExpired: expired, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), cardColors: safeColors(shop.cardColors), cardStyle: safeCardStyle(shop.cardStyle), visibleSections: shopSections(shop), chatEnabled: shop.chatEnabled !== false, customCss: safeShopCss(shop.customCss), createdAt: shop.createdAt }; };
 const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage) });
 const sanitizeItem = (item) => ({ id: item.id, name: item.name, category: item.category, prepMinutes: item.prepMinutes, image: catalogImages.includes(item.image) ? item.image : productImage(item.name,item.category), active: item.active !== false });
 const safeOrder = (order) => { const { pushSubscriptions, ...visible } = order; return visible; };
@@ -379,6 +434,14 @@ app.get('/api/public/custom-style.css', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.type('text/css').send(preset?.css || '/* No custom style is active. */');
+});
+app.get('/api/public/shop-style.css/:slug/:surface', (req, res) => {
+  const shop = db.shops.find((entry) => entry.slug === req.params.slug);
+  const css = shop && Object.hasOwn(shopCssScopes, req.params.surface) ? sanitizeShopCss(shop.customCss?.[req.params.surface] || '', req.params.surface) : null;
+  if (!shop || css === null) return res.status(404).type('text/plain').send('Not found');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.type('text/css').send(css);
 });
 app.get('/api/public/manifest.webmanifest', (req, res) => {
   const appName = db.settings.appName || 'نوى';
@@ -495,8 +558,10 @@ app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
   if (name.length < 2 || !/^[A-Za-z0-9_.-]{3,40}$/.test(username) || !validPassword(password) || !validSubscriptionDate(subscriptionEndDate)) return res.status(400).json({ error: 'تحقق من بيانات المتجر وحدد تاريخ انتهاء اشتراك صالحًا' });
   if (db.shops.some((s) => s.username === username) || db.users.some((u) => u.username === username)) return res.status(409).json({ error: 'اسم المستخدم مستخدم من قبل' });
   if (req.body?.reviewUrl && !reviewUrl) return res.status(400).json({ error: 'أدخل رابط Google Maps آمن يبدأ بـ HTTPS' });
+  const customCss = req.body?.customCss === undefined ? { store: '', card: '', screen: '' } : sanitizeShopCssSet(req.body.customCss);
+  if (!customCss) return res.status(400).json({ error: 'تحقق من CSS: استخدم محددات داخل مساحة المتجر أو بطاقة العميل أو شاشة البانر، دون روابط أو قواعد عامة.' });
   const slug = `${username.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-${crypto.randomBytes(2).toString('hex')}`;
-  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, subscriptionEndDate, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', bannerImage: safeImage(req.body?.bannerImage), iconImage: safeImage(req.body?.iconImage), cardColors: safeColors(req.body?.cardColors), cardStyle: safeCardStyle(req.body?.cardStyle), visibleSections: Array.isArray(req.body?.visibleSections) ? req.body.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections], createdAt: new Date().toISOString() };
+  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, subscriptionEndDate, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', bannerImage: safeImage(req.body?.bannerImage), iconImage: safeImage(req.body?.iconImage), cardColors: safeColors(req.body?.cardColors), cardStyle: safeCardStyle(req.body?.cardStyle), visibleSections: Array.isArray(req.body?.visibleSections) ? req.body.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections], chatEnabled: req.body?.chatEnabled !== false, customCss, createdAt: new Date().toISOString() };
   if ((req.body?.bannerImage && !shop.bannerImage) || (req.body?.iconImage && !shop.iconImage)) return res.status(400).json({ error: 'الصورة غير صالحة أو أكبر من الحد المسموح' });
   db.shops.push(shop); await saveDb(); res.status(201).json({ shop: safeShop(shop) });
 });
@@ -535,8 +600,17 @@ app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) =
   }
   if (req.body?.cardStyle !== undefined) {
     const style=req.body.cardStyle;
-    if(!style||typeof style!=='object'||Array.isArray(style)||!Number.isInteger(style.width)||style.width<320||style.width>640||!Number.isInteger(style.height)||style.height<480||style.height>900||!Number.isInteger(style.padding)||style.padding<0||style.padding>48||!Number.isInteger(style.outerPadding)||style.outerPadding<0||style.outerPadding>48||!Number.isInteger(style.radius)||style.radius<14||style.radius>40||!Number.isInteger(style.scale)||style.scale<90||style.scale>115||!Number.isInteger(style.shadow)||style.shadow<0||style.shadow>30)return res.status(400).json({error:'إعداد شكل البطاقة خارج النطاق المسموح'});
+    if(!style||typeof style!=='object'||Array.isArray(style)||!Number.isInteger(style.padding)||style.padding<0||style.padding>48||!Number.isInteger(style.radius)||style.radius<14||style.radius>40||!Number.isInteger(style.scale)||style.scale<90||style.scale>115||!Number.isInteger(style.shadow)||style.shadow<0||style.shadow>30)return res.status(400).json({error:'إعداد شكل البطاقة خارج النطاق المسموح'});
     shop.cardStyle=safeCardStyle(style);
+  }
+  if (req.body?.chatEnabled !== undefined) {
+    if (typeof req.body.chatEnabled !== 'boolean') return res.status(400).json({ error: 'حالة تواصل المتجر غير صالحة' });
+    shop.chatEnabled = req.body.chatEnabled;
+  }
+  if (req.body?.customCss !== undefined) {
+    const customCss = sanitizeShopCssSet(req.body.customCss);
+    if (!customCss) return res.status(400).json({ error: 'تحقق من CSS: استخدم محددات داخل مساحة المتجر أو بطاقة العميل أو شاشة البانر، دون روابط أو قواعد عامة.' });
+    shop.customCss = customCss;
   }
   if (req.body?.visibleSections !== undefined) {
     if (!Array.isArray(req.body.visibleSections) || req.body.visibleSections.some((section) => !allShopSections.includes(section))) return res.status(400).json({ error: 'قائمة أقسام المتجر غير صالحة' });
@@ -573,8 +647,8 @@ function chatForShop(shop, req, res) {
 app.get('/api/admin/chat/inbox', requireLogin, requireAdmin, (req, res) => res.json({ chats: db.shops.map((shop) => ({ id: shop.id, name: shop.name, unread: (shop.messages || []).filter((message) => message.sender === 'shop' && message.createdAt > (shop.adminReadAt || '')).length, latest: shop.messages?.at(-1) || null })) }));
 app.get('/api/admin/shops/:id/chat', requireLogin, requireAdmin, (req, res) => { const shop=db.shops.find((entry)=>entry.id===req.params.id); return shop ? chatForShop(shop,req,res) : res.status(404).json({error:'المتجر غير موجود'}); });
 app.post('/api/admin/shops/:id/chat', requireLogin, requireAdmin, (req, res) => { const shop=db.shops.find((entry)=>entry.id===req.params.id); return shop ? chatForShop(shop,req,res) : res.status(404).json({error:'المتجر غير موجود'}); });
-app.get('/api/shop/chat', requireLogin, requireShop, (req,res)=>chatForShop(req.shop,req,res));
-app.post('/api/shop/chat', requireLogin, requireShop, (req,res)=>chatForShop(req.shop,req,res));
+app.get('/api/shop/chat', requireLogin, requireShop, (req,res)=>req.shop.chatEnabled===false?res.status(403).json({error:'التواصل مع الأدمن غير متاح لهذا المتجر'}):chatForShop(req.shop,req,res));
+app.post('/api/shop/chat', requireLogin, requireShop, (req,res)=>req.shop.chatEnabled===false?res.status(403).json({error:'التواصل مع الأدمن غير متاح لهذا المتجر'}):chatForShop(req.shop,req,res));
 app.post('/api/admin/shops/:id/items', requireLogin, requireAdmin, (req, res) => {
   const shop = db.shops.find((s) => s.id === req.params.id);
   return shop ? manageShopItems(shop, req, res) : res.status(404).json({ error: 'المتجر غير موجود' });
@@ -589,7 +663,7 @@ app.delete('/api/admin/shops/:id/items/:itemId', requireLogin, requireAdmin, (re
 });
 
 app.get('/api/shop/orders', requireLogin, requireShop, (req, res) => res.json({ orders: db.orders.filter((o) => o.shopId === req.shop.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(safeOrder) }));
-app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), cardColors: safeColors(req.shop.cardColors), cardStyle: safeCardStyle(req.shop.cardStyle), visibleSections: shopSections(req.shop), subscriptionEndDate: validSubscriptionDate(req.shop.subscriptionEndDate) ? req.shop.subscriptionEndDate : '', subscriptionDaysRemaining: subscriptionDaysRemaining(req.shop) } }));
+app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), cardColors: safeColors(req.shop.cardColors), cardStyle: safeCardStyle(req.shop.cardStyle), visibleSections: shopSections(req.shop), chatEnabled: req.shop.chatEnabled !== false, subscriptionEndDate: validSubscriptionDate(req.shop.subscriptionEndDate) ? req.shop.subscriptionEndDate : '', subscriptionDaysRemaining: subscriptionDaysRemaining(req.shop) } }));
 async function createOrderForShop(shop, body, res) {
   const customerName = cleanText(body?.customerName, 60);
   let item = '', items = [], prepMinutes = 0;
@@ -682,7 +756,7 @@ app.get('/api/public/orders/:id', async (req, res) => {
   if (!order.scanned) return res.status(403).json({ error: 'امسح رمز الطلب المعروض على شاشة المتجر لعرض بطاقة الحالة' });
   const shop = db.shops.find((s) => s.id === order.shopId);
   const publicShop={ name: shop?.name || '', bannerText: shop?.bannerText || '', reviewUrl: order.status === 'completed' ? shop?.reviewUrl || '' : '', theme: shop?.theme || 'studio' };
-  if(req.query.design==='1')Object.assign(publicShop,{bannerImage:safeImage(shop?.bannerImage),iconImage:safeImage(shop?.iconImage),cardColors:safeColors(shop?.cardColors),cardStyle:safeCardStyle(shop?.cardStyle)});
+  if(req.query.design==='1')Object.assign(publicShop,{slug:shop?.slug||'',bannerImage:safeImage(shop?.bannerImage),iconImage:safeImage(shop?.iconImage),cardColors:safeColors(shop?.cardColors),cardStyle:safeCardStyle(shop?.cardStyle)});
   res.json({ order: { id: order.id, number: order.number, customerName: order.customerName || '', item: order.item, items: order.items || [], prepMinutes: order.prepMinutes || 0, status: order.status, statusLabel: statusLabels[order.status], updatedAt: order.updatedAt }, shop: publicShop });
 });
 app.get('/scan/:id', async (req, res) => {
