@@ -254,7 +254,7 @@ app.use('/api', async (req, res, next) => {
   next();
 });
 const allShopSections = ['home', 'menu', 'design'];
-const defaultCardColors = { surface: '#ffffff', text: '#22251f', accent: '#c94f3d', border: '#e8e6e1' };
+const defaultCardColors = { surface: '#ffffff', text: '#22251f', accent: '#c94f3d', border: '#e8e6e1', panel: '#641b2b' };
 const defaultCardStyle = { width: 440, height: 640, padding: 16, outerPadding: 16, radius: 28, scale: 100, shadow: 10 };
 const safeImage = (value) => typeof value === 'string' && value.length <= 1_500_000 && /^data:image\/(?:webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : '';
 const shopSections = (shop) => Array.isArray(shop.visibleSections) ? shop.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections];

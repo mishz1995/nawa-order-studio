@@ -20,6 +20,7 @@
 .shop-image-preview{display:block;width:100%;max-height:180px;object-fit:cover;border-radius:14px;border:1px solid var(--color-rule)}
 .shop-icon-preview{width:88px;height:88px;object-fit:cover;border-radius:22px;border:1px solid var(--color-rule)}
 .card-color-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.color-inputs{display:flex;align-items:center;gap:6px}.color-inputs .color-hex{width:82px;min-width:0;padding:6px;border:1px solid var(--color-rule);border-radius:8px;background:var(--color-surface);color:var(--color-text);font:600 11px/1.2 ui-monospace,monospace;text-align:center;text-transform:uppercase}
 .card-range-grid{display:grid;gap:8px}
 .card-range{display:grid;grid-template-columns:minmax(115px,1fr) 2fr 42px;align-items:center;gap:9px;padding:9px;border:1px solid var(--color-rule);border-radius:11px;font-size:11px}
 .card-range input{width:100%;accent-color:var(--color-accent-2)}
@@ -148,3 +149,17 @@ body.customer-page .customer-ticket.is-completed .customer-order-number,body.cus
 body.customer-page .customer-ticket.is-completed .customer-ticket-info{justify-content:center}
 body.customer-page .customer-ticket.is-completed .ticket-store-logo{flex:1;min-height:0}
 @media(max-width:620px){body.customer-page .ticket-complete{gap:12px;padding:16px 0}body.customer-page .ticket-complete-mark{width:40px;height:40px;font-size:21px}body.customer-page .ticket-complete h1{font-size:clamp(18px,5vw,23px)}body.customer-page .ticket-complete p{font-size:10px}body.customer-page .ticket-complete .review-btn{min-height:44px;margin-top:4px;font-size:10px}}
+/* Exact card colors and resilient sizing for admin-selected dimensions and padding. */
+.card-preview-status{background:var(--customer-card-panel,var(--color-ticket-wine))}
+.card-preview-info{background:var(--customer-card-surface,var(--color-ticket-cream));color:var(--customer-card-text,var(--color-ticket-wine-type))}
+body.customer-page .customer-ticket--09,body.customer-page .customer-card--09{height:min(var(--customer-card-height,640px),calc(100svh - var(--customer-card-outer-padding,16px) - var(--customer-card-outer-padding,16px)));min-height:0;grid-template-columns:minmax(0,2fr) minmax(0,1fr);}
+body.customer-page .customer-ticket-status{min-height:0;overflow:auto;background:var(--customer-card-panel,var(--color-ticket-wine));}
+body.customer-page .customer-ticket-info{min-height:0;overflow:auto;background:var(--customer-card-surface,var(--color-ticket-cream));}
+body.customer-page .customer-ticket-brand,body.customer-page .ticket-status-body,body.customer-page .ticket-progress,body.customer-page .notification-setup,body.customer-page .notification-hint{flex-shrink:0}
+body.customer-page .ticket-status-body{margin:clamp(8px,3vh,24px) clamp(4px,2vw,24px)}
+body.customer-page .ticket-progress-step{min-height:clamp(32px,7vh,52px);overflow-wrap:anywhere}
+body.customer-page .ticket-info-rule{flex:none;background:var(--customer-card-border,var(--color-rule))}
+body.customer-page .customer-order-number,body.customer-page .customer-item-copy{flex:none;overflow-wrap:anywhere}
+body.customer-page .ticket-store-logo{min-height:0;flex:1 1 120px}
+body.customer-page .ticket-store-logo img{max-width:100%;max-height:100%;}
+@media(max-width:620px){body.customer-page .customer-ticket--09,body.customer-page .customer-card--09{min-height:0;grid-template-columns:minmax(0,2fr) minmax(0,1fr)}body.customer-page .customer-ticket-status,body.customer-page .customer-ticket-info{min-width:0}body.customer-page .ticket-progress-step{min-height:clamp(30px,6vh,44px)}}
