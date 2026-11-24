@@ -345,7 +345,7 @@ function orderPage(id){
   setupPush(id);update();setInterval(update,3500);
 }
 function decodeVapidKey(base64){const padding='='.repeat((4-base64.length%4)%4);const raw=atob((base64+padding).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from(raw,c=>c.charCodeAt(0));}
-function playReadySound(){const audio=document.getElementById('readySoundAudio');if(!audio)return Promise.reject(new Error('Audio unavailable'));audio.currentTime=0;return audio.play();}
+function playReadySound(){const audio=document.getElementById('readySoundAudio');if(!audio)return Promise.reject(new Error('Audio unavailable'));if('mediaSession'in navigator&&'MediaMetadata'in window){navigator.mediaSession.metadata=new MediaMetadata({title:'طلب جاهز للاستلام',artist:'',album:''});navigator.mediaSession.playbackState='playing';if(!audio.dataset.mediaSessionBound){audio.addEventListener('ended',()=>{if('mediaSession'in navigator)navigator.mediaSession.playbackState='none';});audio.dataset.mediaSessionBound='true';}}audio.currentTime=0;return audio.play();}
 async function setupPush(orderId){
   const button=document.getElementById('enableNotify'),hint=document.getElementById('notifyHint');
   button.textContent='♧ فعّل الصوت وإشعار الجاهزية';
