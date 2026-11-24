@@ -104,6 +104,17 @@ const editorFields = {
     panel.querySelectorAll('[data-image]').forEach(fileInput=>fileInput.addEventListener('change',async event=>{const file=event.target.files?.[0],property=event.target.dataset.image;if(!file||file.size>1_000_000){panel.querySelector('.visual-editor-note').textContent='حجم الصورة يجب ألا يتجاوز 1 ميغابايت.';return;}const reader=new FileReader();reader.onload=()=>{const image=String(reader.result||'');if(!/^data:image\/(?:webp|png|jpeg);base64,/.test(image))return;deleted.delete(selected);draft[selected]={...(draft[selected]||{}),[property]:image};applyOne(node,selectedEdit());};reader.readAsDataURL(file);}));
     panel.querySelector('[data-reset]').onclick=()=>{delete draft[selected];deleted.add(selected);const base={...selectedContextEdits()};delete base[selected];apply(context.scope,base,targetDoc());select(node);};
     panel.querySelector('[data-save]').onclick=save;
+    const dragHandle=panel.querySelector('.visual-editor-head');
+    dragHandle.onpointerdown=event=>{
+      if(event.target.closest('[data-close]')||event.button!==0)return;
+      const rect=panel.getBoundingClientRect();
+      const offsetX=event.clientX-rect.left,offsetY=event.clientY-rect.top;
+      panel.style.left=`${rect.left}px`;panel.style.top=`${rect.top}px`;panel.style.right='auto';panel.style.bottom='auto';
+      dragHandle.setPointerCapture(event.pointerId);panel.dataset.dragging='';event.preventDefault();
+      const move=moveEvent=>{const maxLeft=Math.max(8,window.innerWidth-panel.offsetWidth-8),maxTop=Math.max(8,window.innerHeight-Math.min(panel.offsetHeight,window.innerHeight-16)-8);panel.style.left=`${Math.max(8,Math.min(maxLeft,moveEvent.clientX-offsetX))}px`;panel.style.top=`${Math.max(8,Math.min(maxTop,moveEvent.clientY-offsetY))}px`;};
+      const end=endEvent=>{panel?.removeAttribute('data-dragging');try{dragHandle.releasePointerCapture(endEvent.pointerId);}catch{}dragHandle.removeEventListener('pointermove',move);dragHandle.removeEventListener('pointerup',end);dragHandle.removeEventListener('pointercancel',end);};
+      dragHandle.addEventListener('pointermove',move);dragHandle.addEventListener('pointerup',end);dragHandle.addEventListener('pointercancel',end);
+    };
   }
   function selectedContextEdits(){return context.allEdits?.[context.scope]||{};}
   function select(node){clearSelection();selected=node.dataset.visualKey;node.dataset.visualSelected='';renderPanel();}
