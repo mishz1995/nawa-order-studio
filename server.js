@@ -315,6 +315,59 @@ const sanitizeShopCssSet = (value) => {
 const safeImage = (value) => typeof value === 'string' && value.length <= 1_500_000 && /^data:image\/(?:webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : '';
 const shopSections = (shop) => Array.isArray(shop.visibleSections) ? shop.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections];
 const safeColors = (value) => Object.fromEntries(Object.entries(defaultCardColors).map(([key, fallback]) => [key, typeof value?.[key] === 'string' && /^#[0-9a-f]{6}$/i.test(value[key]) ? value[key] : fallback]));
+const sanitizeVisualEdits = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).length > 20) return null;
+  const result = {};
+  let totalBytes = 0, elements = 0;
+  const keyPattern = /^(?:id:[A-Za-z][A-Za-z0-9_-]{0,79}|path:(?:[a-z][a-z0-9-]*:\d+\/){0,64}[a-z][a-z0-9-]*:\d+)$/;
+  const colorProps = new Set(['color', 'backgroundColor', 'borderColor']);
+  const sizeProps = new Set(['fontSize', 'borderWidth', 'borderRadius', 'padding', 'margin', 'width', 'height']);
+  for (const [scope, entries] of Object.entries(raw)) {
+    if (!/^(?:site:login|admin:[a-z0-9:_-]{1,90}|home|menu|design|card|screen)$/i.test(scope) || !entries || typeof entries !== 'object' || Array.isArray(entries)) return null;
+    const safeEntries = {};
+    for (const [key, edit] of Object.entries(entries)) {
+      if (++elements > 500 || !keyPattern.test(key) || !edit || typeof edit !== 'object' || Array.isArray(edit)) return null;
+      const safe = {};
+      for (const [property, value] of Object.entries(edit)) {
+        if (property === 'text' || property === 'alt' || property === 'placeholder') {
+          if (typeof value !== 'string' || value.length > 160) return null;
+          const text = cleanText(value, 160);
+          if (!text && value.trim()) return null;
+          safe[property] = text;
+        } else if (colorProps.has(property)) {
+          if (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value)) return null;
+          safe[property] = value;
+        } else if (sizeProps.has(property)) {
+          if (!Number.isInteger(value) || value < 0 || value > (property === 'width' || property === 'height' ? 1600 : property === 'fontSize' ? 96 : 128)) return null;
+          safe[property] = value;
+        } else if (property === 'opacity') {
+          if (!Number.isInteger(value) || value < 0 || value > 100) return null;
+          safe[property] = value;
+        } else if (property === 'fontWeight') {
+          if (![400, 500, 600, 700, 800].includes(value)) return null;
+          safe[property] = value;
+        } else if (property === 'textAlign') {
+          if (!['start', 'center', 'end', 'right', 'left'].includes(value)) return null;
+          safe[property] = value;
+        } else if (property === 'borderStyle') {
+          if (!['none', 'solid', 'dashed', 'dotted'].includes(value)) return null;
+          safe[property] = value;
+        } else if (property === 'display') {
+          if (!['none', 'block', 'flex', 'grid', 'inline', 'inline-flex'].includes(value)) return null;
+          safe[property] = value;
+        } else if (property === 'image') {
+          const image = safeImage(value);
+          if (!image) return null;
+          safe.image = image;
+        } else return null;
+      }
+      safeEntries[key] = safe;
+    }
+    result[scope] = safeEntries;
+  }
+  totalBytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
+  return totalBytes <= 3_000_000 ? result : null;
+};
 const validSubscriptionDate = (value) => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number);
@@ -332,8 +385,8 @@ const subscriptionDaysRemaining = (shop, now = Date.now()) => {
 };
 const subscriptionExpired = (shop, now = Date.now()) => subscriptionDaysRemaining(shop, now) === 0;
 const safeCardStyle = (value) => ({ padding: Number.isInteger(value?.padding) && value.padding >= 0 && value.padding <= 48 ? value.padding : defaultCardStyle.padding, radius: Number.isInteger(value?.radius) && value.radius >= 14 && value.radius <= 40 ? value.radius : defaultCardStyle.radius, scale: Number.isInteger(value?.scale) && value.scale >= 90 && value.scale <= 115 ? value.scale : defaultCardStyle.scale, shadow: Number.isInteger(value?.shadow) && value.shadow >= 0 && value.shadow <= 30 ? value.shadow : defaultCardStyle.shadow });
-const safeShop = (shop) => { const remaining = subscriptionDaysRemaining(shop); const expired = remaining === 0; return { id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active && !expired, subscriptionEndDate: validSubscriptionDate(shop.subscriptionEndDate) ? shop.subscriptionEndDate : '', subscriptionDaysRemaining: remaining, subscriptionExpired: expired, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), cardColors: safeColors(shop.cardColors), cardStyle: safeCardStyle(shop.cardStyle), visibleSections: shopSections(shop), chatEnabled: shop.chatEnabled !== false, customCssEnabled: shop.customCssEnabled !== false, customCss: safeShopCss(shop.customCss), createdAt: shop.createdAt }; };
-const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage) });
+const safeShop = (shop) => { const remaining = subscriptionDaysRemaining(shop); const expired = remaining === 0; return { id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active && !expired, subscriptionEndDate: validSubscriptionDate(shop.subscriptionEndDate) ? shop.subscriptionEndDate : '', subscriptionDaysRemaining: remaining, subscriptionExpired: expired, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), cardColors: safeColors(shop.cardColors), cardStyle: safeCardStyle(shop.cardStyle), visualEdits: sanitizeVisualEdits(shop.visualEdits) || {}, visibleSections: shopSections(shop), chatEnabled: shop.chatEnabled !== false, customCssEnabled: shop.customCssEnabled !== false, customCss: safeShopCss(shop.customCss), createdAt: shop.createdAt }; };
+const publicScreenShop = (shop) => { const edits=sanitizeVisualEdits(shop.visualEdits)||{}; return { slug: shop.slug, name: shop.name, theme: shop.theme, bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), visualEdits: { screen: edits.screen||{} } }; };
 const sanitizeItem = (item) => ({ id: item.id, name: item.name, category: item.category, prepMinutes: item.prepMinutes, image: catalogImages.includes(item.image) ? item.image : productImage(item.name,item.category), active: item.active !== false });
 const safeOrder = (order) => { const { pushSubscriptions, ...visible } = order; return visible; };
 async function manageShopItems(shop, req, res) {
@@ -431,7 +484,7 @@ const publicBranding = () => {
   for (const key of ['loginBackground', 'loginButtonColor']) if (typeof branding[key] !== 'string' || !/^#[0-9a-f]{6}$/i.test(branding[key])) branding[key] = defaultBranding[key];
   return branding;
 };
-app.get('/api/public/settings', (req, res) => res.json({ settings: { appName: db.settings.appName || 'نوى', branding: publicBranding(), textOverrides: db.settings.textOverrides || {} } }));
+app.get('/api/public/settings', (req, res) => res.json({ settings: { appName: db.settings.appName || 'نوى', branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, visualEdits: sanitizeVisualEdits(db.settings.visualEdits) || {} } }));
 app.get('/api/public/custom-style.css', (req, res) => {
   const preset = (db.settings.stylePresets || []).find((style) => style.id === db.settings.activeStyleId);
   res.setHeader('Cache-Control', 'no-store');
@@ -457,7 +510,7 @@ app.get('/api/public/manifest.webmanifest', (req, res) => {
 app.get('/api/admin/shops', requireLogin, requireAdmin, (req, res) => res.json({ shops: db.shops.map(safeShop) }));
 app.get('/api/admin/settings', requireLogin, requireAdmin, (req, res) => {
   const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
-  res.json({ settings: { appName: db.settings.appName || 'نوى', adminDisplayName: db.settings.adminDisplayName || '', branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '', twoFactorEnabled: Boolean(admin?.totpSecret) } });
+  res.json({ settings: { appName: db.settings.appName || 'نوى', adminDisplayName: db.settings.adminDisplayName || '', branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, visualEdits: sanitizeVisualEdits(db.settings.visualEdits) || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '', twoFactorEnabled: Boolean(admin?.totpSecret) } });
 });
 app.post('/api/admin/password', requireLogin, requireAdmin, async (req, res) => {
   const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
@@ -509,6 +562,11 @@ app.patch('/api/admin/settings', requireLogin, requireAdmin, async (req, res) =>
   const appName = req.body?.appName === undefined ? db.settings.appName : cleanText(req.body.appName, 40);
   if (typeof appName !== 'string' || appName.length < 2) return res.status(400).json({ error: 'اسم الموقع يجب أن يكون حرفين على الأقل' });
   db.settings.appName = appName;
+  if (req.body?.visualEdits !== undefined) {
+    const edits = sanitizeVisualEdits(req.body.visualEdits);
+    if (!edits) return res.status(400).json({ error: 'تعديلات التصميم غير صالحة أو تتجاوز الحد المسموح' });
+    db.settings.visualEdits = edits;
+  }
   if (req.body?.adminDisplayName !== undefined) db.settings.adminDisplayName = cleanText(req.body.adminDisplayName, 60);
   if (req.body?.textOverrides !== undefined) {
     const overrides = req.body.textOverrides;
@@ -556,7 +614,7 @@ app.patch('/api/admin/settings', requireLogin, requireAdmin, async (req, res) =>
     db.settings.activeStyleId = activeStyleId;
   }
   await saveDb();
-  res.json({ settings: { appName, adminDisplayName: db.settings.adminDisplayName || '', branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '' } });
+  res.json({ settings: { appName, adminDisplayName: db.settings.adminDisplayName || '', branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, visualEdits: sanitizeVisualEdits(db.settings.visualEdits) || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '' } });
 });
 app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
   const name = cleanText(req.body?.name, 70);
@@ -592,6 +650,11 @@ app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) =
     shop.authVersion = (shop.authVersion || 0) + 1;
   }
   if (req.body?.name !== undefined) shop.name = cleanText(req.body.name, 70) || shop.name;
+  if (req.body?.visualEdits !== undefined) {
+    const edits = sanitizeVisualEdits(req.body.visualEdits);
+    if (!edits) return res.status(400).json({ error: 'تعديلات التصميم غير صالحة أو تتجاوز الحد المسموح' });
+    shop.visualEdits = edits;
+  }
   if (req.body?.reviewUrl !== undefined) {
     const url = req.body.reviewUrl === '' ? '' : googleUrl(req.body.reviewUrl);
     if (req.body.reviewUrl && !url) return res.status(400).json({ error: 'أدخل رابط Google Maps آمن يبدأ بـ HTTPS' });
@@ -678,7 +741,7 @@ app.delete('/api/admin/shops/:id/items/:itemId', requireLogin, requireAdmin, (re
 });
 
 app.get('/api/shop/orders', requireLogin, requireShop, (req, res) => res.json({ orders: db.orders.filter((o) => o.shopId === req.shop.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(safeOrder) }));
-app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), cardColors: safeColors(req.shop.cardColors), cardStyle: safeCardStyle(req.shop.cardStyle), visibleSections: shopSections(req.shop), chatEnabled: req.shop.chatEnabled !== false, subscriptionEndDate: validSubscriptionDate(req.shop.subscriptionEndDate) ? req.shop.subscriptionEndDate : '', subscriptionDaysRemaining: subscriptionDaysRemaining(req.shop) } }));
+app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { id: req.shop.id, slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, visualEdits: sanitizeVisualEdits(req.shop.visualEdits) || {}, orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), cardColors: safeColors(req.shop.cardColors), cardStyle: safeCardStyle(req.shop.cardStyle), visibleSections: shopSections(req.shop), chatEnabled: req.shop.chatEnabled !== false, subscriptionEndDate: validSubscriptionDate(req.shop.subscriptionEndDate) ? req.shop.subscriptionEndDate : '', subscriptionDaysRemaining: subscriptionDaysRemaining(req.shop) } }));
 async function createOrderForShop(shop, body, res) {
   const customerName = cleanText(body?.customerName, 60);
   let item = '', items = [], prepMinutes = 0;
@@ -761,6 +824,11 @@ app.delete('/api/shop/items/:itemId', requireLogin, requireShop, (req, res) => m
 app.patch('/api/shop/settings', requireLogin, requireShop, async (req, res) => {
   if (themes.includes(req.body?.theme)) req.shop.theme = req.body.theme;
   if (req.body?.bannerText !== undefined) req.shop.bannerText = cleanText(req.body.bannerText, 90);
+  if (req.body?.visualEdits !== undefined) {
+    const edits = sanitizeVisualEdits(req.body.visualEdits);
+    if (!edits) return res.status(400).json({ error: 'تعديلات التصميم غير صالحة أو تتجاوز الحد المسموح' });
+    req.shop.visualEdits = edits;
+  }
   await saveDb(); res.json({ shop: safeShop(req.shop) });
 });
 
@@ -771,7 +839,8 @@ app.get('/api/public/orders/:id', async (req, res) => {
   if (!order.scanned) return res.status(403).json({ error: 'امسح رمز الطلب المعروض على شاشة المتجر لعرض بطاقة الحالة' });
   const shop = db.shops.find((s) => s.id === order.shopId);
   const publicShop={ name: shop?.name || '', bannerText: shop?.bannerText || '', reviewUrl: order.status === 'completed' ? shop?.reviewUrl || '' : '', theme: shop?.theme || 'studio' };
-  if(req.query.design==='1')Object.assign(publicShop,{slug:shop?.slug||'',bannerImage:safeImage(shop?.bannerImage),iconImage:safeImage(shop?.iconImage),cardColors:safeColors(shop?.cardColors),cardStyle:safeCardStyle(shop?.cardStyle)});
+  if (req.session.user?.role === 'admin') publicShop.adminShopId = shop?.id || '';
+  if(req.query.design==='1'){const edits=sanitizeVisualEdits(shop?.visualEdits)||{};Object.assign(publicShop,{slug:shop?.slug||'',bannerImage:safeImage(shop?.bannerImage),iconImage:safeImage(shop?.iconImage),cardColors:safeColors(shop?.cardColors),cardStyle:safeCardStyle(shop?.cardStyle),visualEdits:{card:edits.card||{}}});}
   res.json({ order: { id: order.id, number: order.number, customerName: order.customerName || '', item: order.item, items: order.items || [], prepMinutes: order.prepMinutes || 0, status: order.status, statusLabel: statusLabels[order.status], updatedAt: order.updatedAt }, shop: publicShop });
 });
 app.get('/scan/:id', async (req, res) => {
@@ -806,6 +875,7 @@ app.get('/api/public/screen/:slug', async (req, res) => {
   if (!shop) return res.status(404).json({ error: 'المتجر غير متاح' });
   const active = Date.now() < (shop.screenBannerUntil || 0) ? null : db.orders.find((o) => o.shopId === shop.id && o.status !== 'completed' && !o.scanned);
   const screenShop=publicScreenShop(shop);if(req.query.design!=='1'){delete screenShop.bannerImage;delete screenShop.iconImage;}
+  if (req.session.user?.role === 'admin') screenShop.adminShopId = shop.id;
   res.json({ shop: screenShop, activeOrder: active ? { number: active.number, status: active.status, statusLabel: statusLabels[active.status], qr: await QRCode.toDataURL(`${appBaseUrl()}/scan/${active.id}`, { width: 240, margin: 1 }) } : null });
 });
 

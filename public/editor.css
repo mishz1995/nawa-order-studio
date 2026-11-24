@@ -19,3 +19,21 @@
   .login-wrap:has([data-editor-target]) .login-art{display:flex;min-height:260px;gap:20px;padding:24px}
   .login-wrap:has([data-editor-target]) .login-side{min-height:auto}
 }
+
+body.visual-editing #view{cursor:crosshair}
+body.visual-editing [data-visual-key]{cursor:crosshair!important;outline:1px dashed transparent;outline-offset:2px;transition:outline-color .14s ease,box-shadow .14s ease}
+body.visual-editing [data-visual-hover],body.visual-editing [data-visual-selected]{outline:2px solid #aa5e7a!important;outline-offset:2px;box-shadow:0 0 0 4px #aa5e7a22!important;position:relative;z-index:2}
+.visual-editor-panel{position:fixed;z-index:10000;inset-inline-start:18px;bottom:18px;width:min(430px,calc(100vw - 36px));max-height:min(78vh,760px);overflow:auto;padding:18px;border:1px solid #d9d4d1;border-radius:18px;background:#fffdfa;color:#22191d;box-shadow:0 18px 60px #1f111b30;font:inherit;direction:rtl}
+.visual-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}
+.visual-editor-head strong{display:block;font-size:16px}.visual-editor-head small{display:block;margin-top:4px;color:#75666e;direction:ltr;text-align:right;overflow-wrap:anywhere;font-size:11px}
+.visual-close{width:34px;height:34px;border:1px solid #e5dce0;border-radius:50%;background:#fff;color:#4d2034;font-size:24px;line-height:1;cursor:pointer}
+.visual-editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.visual-field{display:grid;gap:5px;min-width:0;color:#56444b;font-size:12px;font-weight:650}
+.visual-field input,.visual-field select{width:100%;min-width:0;height:38px;border:1px solid #e4dadd;border-radius:9px;background:#fff;padding:5px 8px;color:#271920;font:inherit;font-size:13px}
+.visual-field input[type=color]{padding:3px;cursor:pointer}.visual-field input[type=file]{height:auto;padding:7px;font-size:11px}
+.visual-editor-actions{display:flex;gap:8px;margin-top:14px}.visual-editor-actions .button{flex:1}
+.visual-editor-note{margin:9px 0 0;color:#6f4657;font-size:12px;min-height:18px}
+.public-visual-edit{position:fixed;z-index:9998;inset-inline-end:16px;top:16px;box-shadow:0 8px 24px #24151d20}
+body.visual-editing [data-visual-tools],[data-visual-tools] *{cursor:auto!important}
+@media(max-width:600px){.visual-editor-panel{inset-inline:10px;bottom:10px;width:auto;max-height:72vh;padding:14px}.visual-editor-grid{gap:8px}.visual-editor-actions{position:sticky;bottom:-14px;background:#fffdfa;padding-block:10px 0}}
+@media(prefers-reduced-motion:reduce){body.visual-editing [data-visual-key]{transition:none}}
