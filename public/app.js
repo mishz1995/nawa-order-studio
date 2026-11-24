@@ -300,9 +300,10 @@ function orderPage(id){
   document.body.className='customer-page';
   app.innerHTML=orderMarkup();
   document.getElementById('customerLanguage').append(languageToggle());applyLanguage(document.body);
-  let orderDesignLoaded=false;
+  let orderDesignLoaded=false,orderVisualEdits={},orderAdminShopId='';
   const update=async()=>{try{
     const {order,shop}=await api(`/api/public/orders/${encodeURIComponent(id)}${orderDesignLoaded?'':'?design=1'}`);orderDesignLoaded=true;applyShopCss(shop.slug,'card');
+    if(shop.visualEdits)orderVisualEdits=shop.visualEdits;if(shop.adminShopId)orderAdminShopId=shop.adminShopId;
     document.body.className=`customer-page ${themeClass(shop.theme)}`;
     const colorProperties={surface:'--customer-card-surface',text:'--customer-card-text',accent:'--customer-card-accent',border:'--customer-card-border',panel:'--customer-card-panel'};
     for(const [key,property] of Object.entries(colorProperties))if(/^#[0-9a-f]{6}$/i.test(shop.cardColors?.[key]||''))document.documentElement.style.setProperty(property,shop.cardColors[key]);
@@ -316,8 +317,8 @@ function orderPage(id){
     document.getElementById('prepEstimate').textContent=order.prepMinutes?`المدة التقديرية: ${order.prepMinutes} دقائق`:'';
     const currentStep=orderStates.indexOf(order.status);document.querySelectorAll('[data-progress]').forEach(el=>{const step=orderStates.indexOf(el.dataset.progress);el.classList.toggle('done',step>=0&&step<currentStep);el.classList.toggle('current',step===currentStep);});
     const isCompleted=order.status==='completed',canReview=isCompleted&&!!shop.reviewUrl,ticket=document.querySelector('.customer-ticket');ticket.classList.toggle('is-completed',isCompleted);document.querySelector('.ticket-status-body').classList.toggle('hidden',isCompleted);document.getElementById('orderProgress').classList.toggle('hidden',isCompleted);document.getElementById('enableNotify').classList.toggle('hidden',isCompleted);document.getElementById('notifyHint').classList.toggle('hidden',isCompleted);document.getElementById('orderComplete').classList.toggle('hidden',!isCompleted);document.getElementById('reviewPrompt').classList.toggle('hidden',!canReview);const review=document.getElementById('reviewBtn');if(canReview){review.href=shop.reviewUrl;review.classList.remove('hidden');}else{review.removeAttribute('href');review.classList.add('hidden');}
-    if(window.currentUser?.role==='admin'){let edit=document.getElementById('publicVisualEdit');if(!edit){edit=document.createElement('button');edit.id='publicVisualEdit';edit.className='button soft public-visual-edit';edit.textContent='✎ تحرير البطاقة';document.body.append(edit);}edit.onclick=async()=>{try{const all=(await api('/api/admin/shops')).shops,full=all.find(item=>item.id===shop.adminShopId);if(!full)throw new Error('المتجر غير موجود');window.startInlineVisualEditor?.({scope:'card',layer:'shop',shopId:shop.adminShopId,allEdits:full.visualEdits||{}});}catch(error){toast(error.message);}};}
-    window.applyInlineVisualEdits?.('card',shop.visualEdits?.card||{});
+    if(window.currentUser?.role==='admin'){let edit=document.getElementById('publicVisualEdit');if(!edit){edit=document.createElement('button');edit.id='publicVisualEdit';edit.className='button soft public-visual-edit';edit.textContent='✎ تحرير البطاقة';document.body.append(edit);}edit.onclick=async()=>{try{const all=(await api('/api/admin/shops')).shops,full=all.find(item=>item.id===orderAdminShopId);if(!full)throw new Error('المتجر غير موجود');window.startInlineVisualEditor?.({scope:'card',layer:'shop',shopId:orderAdminShopId,allEdits:full.visualEdits||{}});}catch(error){toast(error.message);}};}
+    window.applyInlineVisualEdits?.('card',orderVisualEdits.card||{});
   }catch(e){document.getElementById('orderStatus').textContent=e.message||'تعذر العثور على الطلب';}};
   setupPush(id);update();setInterval(update,3500);
 }

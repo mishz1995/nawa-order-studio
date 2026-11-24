@@ -320,8 +320,8 @@ const sanitizeVisualEdits = (raw) => {
   const result = {};
   let totalBytes = 0, elements = 0;
   const keyPattern = /^(?:id:[A-Za-z][A-Za-z0-9_-]{0,79}|path:(?:[a-z][a-z0-9-]*:\d+\/){0,64}[a-z][a-z0-9-]*:\d+)$/;
-  const colorProps = new Set(['color', 'backgroundColor', 'borderColor']);
-  const sizeProps = new Set(['fontSize', 'borderWidth', 'borderRadius', 'padding', 'margin', 'width', 'height']);
+  const colorProps = new Set(['color', 'backgroundColor', 'borderColor', 'fill', 'stroke']);
+  const sizeProps = new Set(['fontSize', 'borderWidth', 'borderRadius', 'padding', 'margin', 'width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight', 'gap', 'lineHeight', 'letterSpacing']);
   for (const [scope, entries] of Object.entries(raw)) {
     if (!/^(?:site:login|admin:[a-z0-9:_-]{1,90}|home|menu|design|card|screen)$/i.test(scope) || !entries || typeof entries !== 'object' || Array.isArray(entries)) return null;
     const safeEntries = {};
@@ -335,10 +335,10 @@ const sanitizeVisualEdits = (raw) => {
           if (!text && value.trim()) return null;
           safe[property] = text;
         } else if (colorProps.has(property)) {
-          if (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value)) return null;
+          if (typeof value !== 'string' || !(property === 'backgroundColor' && value === 'transparent') && !/^#[0-9a-f]{6}$/i.test(value)) return null;
           safe[property] = value;
         } else if (sizeProps.has(property)) {
-          if (!Number.isInteger(value) || value < 0 || value > (property === 'width' || property === 'height' ? 1600 : property === 'fontSize' ? 96 : 128)) return null;
+          if (!Number.isInteger(value) || value < 0 || value > (['width','height','minWidth','minHeight','maxWidth','maxHeight'].includes(property) ? 1600 : property === 'fontSize' ? 96 : 256)) return null;
           safe[property] = value;
         } else if (property === 'opacity') {
           if (!Number.isInteger(value) || value < 0 || value > 100) return null;
@@ -359,6 +359,31 @@ const sanitizeVisualEdits = (raw) => {
           const image = safeImage(value);
           if (!image) return null;
           safe.image = image;
+        } else if (property === 'backgroundImage') {
+          const image = safeImage(value);
+          if (!image) return null;
+          safe.backgroundImage = image;
+        } else if (property === 'objectFit') {
+          if (!['contain', 'cover', 'fill', 'none', 'scale-down'].includes(value)) return null;
+          safe.objectFit = value;
+        } else if (property === 'objectPosition') {
+          if (!['center', 'top', 'bottom', 'left', 'right'].includes(value)) return null;
+          safe.objectPosition = value;
+        } else if (property === 'flexDirection') {
+          if (!['row', 'row-reverse', 'column', 'column-reverse'].includes(value)) return null;
+          safe.flexDirection = value;
+        } else if (property === 'justifyContent') {
+          if (!['start', 'center', 'end', 'space-between', 'space-around', 'space-evenly'].includes(value)) return null;
+          safe.justifyContent = value;
+        } else if (property === 'alignItems') {
+          if (!['start', 'center', 'end', 'stretch', 'baseline'].includes(value)) return null;
+          safe.alignItems = value;
+        } else if (property === 'textTransform') {
+          if (!['none', 'uppercase', 'lowercase', 'capitalize'].includes(value)) return null;
+          safe.textTransform = value;
+        } else if (property === 'boxShadow') {
+          if (!['none', 'soft', 'medium', 'strong'].includes(value)) return null;
+          safe.boxShadow = value;
         } else return null;
       }
       safeEntries[key] = safe;
