@@ -5,6 +5,7 @@ const orderStates = ['queued', 'preparing', 'ready', 'completed'];
 const catalogPhotos = ['/images/customer/almond-croissant-workshop-coffee-lab-2025-06-27-1920.jpg','/images/customer/espresso-coffee-01-1920.jpg','/images/customer/gray-espresso-cup-with-amaretto-1-1920.jpg'];
 let siteName = 'نوى';
 let siteIcon = '';
+let customerReadySoundEnabled = false;
 let brandCopy = { adminBrandTag:'SUPER ADMIN / FULL ACCESS', shopBrandTag:'ORDER CONTROL / STORE', customerBrandTag:'ORDER / LIVE', screenBrandTag:'ORDER SCREEN', workspaceLabel:'WORKSPACE', adminFooter:'سوبر أدمن · كامل الصلاحيات', shopFooter:'إدارة الطلبات اليومية', workLabel:'لوحة العمل', loginBrandTag:'NAWA / ORDER STUDIO · RIYADH', loginHeadline:'طلباتك، بإيقاع أفضل. من أول مسح.', loginIntro:'مساحة هادئة لإدارة متجرك ومتابعة كل طلب حتى لحظة الاستلام.', customerBannerTitle:'تجربة هادئة، حتى أول رشفة.', customerBannerCopy:'تابع حالة طلبك مباشرة من هنا.', screenInstructions:'امسح رمز طلبك لمتابعة حالته', brandMark:'ن', bannerImage:'/images/customer/almond-croissant-workshop-coffee-lab-2025-06-27-1920.jpg' };
 const defaultBrandCopy = { ...brandCopy };
 let textOverrides = {};
@@ -329,7 +330,7 @@ function orderPage(id){
   document.getElementById('customerLanguage').append(languageToggle());applyLanguage(document.body);
   let orderDesignLoaded=false;
   const update=async()=>{try{
-    const {order,shop}=await api(`/api/public/orders/${encodeURIComponent(id)}${orderDesignLoaded?'':'?design=1'}`);orderDesignLoaded=true;applyShopCss(shop.slug,'card');if(order.status==='ready'&&lastOrderStatus!=='ready')void playReadySound().catch(()=>{});lastOrderStatus=order.status;
+    const {order,shop}=await api(`/api/public/orders/${encodeURIComponent(id)}${orderDesignLoaded?'':'?design=1'}`);orderDesignLoaded=true;applyShopCss(shop.slug,'card');if(customerReadySoundEnabled&&order.status==='ready'&&lastOrderStatus!=='ready')void playReadySound().catch(()=>{});lastOrderStatus=order.status;
     document.body.className=`customer-page ${themeClass(shop.theme)}`;applyStoreTheme(shop.theme,shop.customTheme);
     const orderLogo=document.getElementById('orderShopLogo'),logoFrame=document.getElementById('orderShopLogoFrame');if(shop.iconImage){orderLogo.src=shop.iconImage;orderLogo.alt=`شعار ${shop.name}`;orderLogo.classList.remove('hidden');logoFrame.classList.remove('hidden');}
     document.getElementById('orderShop').textContent=shop.name;
@@ -347,18 +348,25 @@ function decodeVapidKey(base64){const padding='='.repeat((4-base64.length%4)%4);
 function playReadySound(){const audio=document.getElementById('readySoundAudio');if(!audio)return Promise.reject(new Error('Audio unavailable'));audio.currentTime=0;return audio.play();}
 async function setupPush(orderId){
   const button=document.getElementById('enableNotify'),hint=document.getElementById('notifyHint');
-  if(!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window)){button.classList.add('hidden');hint.textContent='التحديث المباشر يعمل ما دامت صفحة الطلب مفتوحة.';return;}
-  try{const {key}=await api('/api/public/push-key');if(!key){button.disabled=true;hint.textContent='إشعار الخلفية يحتاج إعداد مفتاح الإشعار على الخادم. ستبقى الحالة محدثة داخل الصفحة.';return;}}
-  catch{button.disabled=true;hint.textContent='تعذر تهيئة الإشعارات على هذا الخادم.';return;}
+  button.textContent='♧ فعّل الصوت وإشعار الجاهزية';
+  const soundOnly=async()=>{try{await playReadySound();customerReadySoundEnabled=true;button.textContent='✓ تم تفعيل صوت الجاهزية';hint.textContent='سيعمل الصوت عند جاهزية الطلب ما دامت البطاقة مفتوحة.';}catch{hint.textContent='تعذر تشغيل الصوت. تحقق من مستوى الصوت ثم أعد المحاولة.';}};
+  button.onclick=soundOnly;
+  const canPush='serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window;
+  let key='';
+  if(canPush)try{key=(await api('/api/public/push-key')).key||'';}catch{}
+  if(!canPush||!key){hint.textContent='اضغط لتفعيل صوت الجاهزية. ستتحدث حالة الطلب ما دامت هذه الصفحة مفتوحة.';button.onclick=soundOnly;return;}
   const ios=/iPhone|iPad|iPod/i.test(navigator.userAgent),standalone=navigator.standalone||matchMedia('(display-mode: standalone)').matches;
-  if(ios&&!standalone)hint.textContent='على iPhone: أضف الموقع إلى الشاشة الرئيسية من زر المشاركة، ثم افتحه منها لتفعيل الإشعارات.';
+  if(ios&&!standalone)hint.textContent='اضغط مرة لتفعيل الصوت. لإشعارات iPhone عند إغلاق الصفحة، أضف الموقع إلى الشاشة الرئيسية وافتحه منها.';
   button.onclick=async()=>{
-    if(ios&&!standalone){toast('أضف الموقع إلى الشاشة الرئيسية أولاً لتفعيل إشعارات iPhone.');return;}
-    if(Notification.permission==='denied'){hint.textContent='الإشعارات محظورة من إعدادات المتصفح. اسمح بها ثم أعد المحاولة.';return;}
-    try{const permission=Notification.permission==='granted'?'granted':await Notification.requestPermission();if(permission!=='granted'){hint.textContent='لم يتم السماح بالإشعارات؛ سيبقى تحديث الحالة داخل الصفحة.';return;}
+    const soundPromise=playReadySound();
+    if(ios&&!standalone){try{await soundPromise;customerReadySoundEnabled=true;button.textContent='✓ تم تفعيل صوت الجاهزية';}catch{}hint.textContent='سيعمل الصوت عند جاهزية الطلب والبطاقة مفتوحة. لإشعارات الخلفية على iPhone، أضف الموقع للشاشة الرئيسية وافتحه منها.';return;}
+    if(Notification.permission==='denied'){try{await soundPromise;customerReadySoundEnabled=true;button.textContent='✓ تم تفعيل الصوت · الإشعار محظور';}catch{}hint.textContent='تم تفعيل الصوت للصفحة المفتوحة، لكن الإشعارات محظورة من إعدادات المتصفح.';return;}
+    const permissionPromise=Notification.permission==='granted'?Promise.resolve('granted'):Notification.requestPermission();
+    try{await soundPromise;customerReadySoundEnabled=true;}catch{}
+    try{const permission=await permissionPromise;if(permission!=='granted'){hint.textContent=customerReadySoundEnabled?'تم تفعيل الصوت. لم يتم السماح بإشعارات الخلفية؛ ستتحدث الحالة داخل الصفحة.':'لم يتم السماح بالإشعارات؛ ستتحدث الحالة داخل الصفحة.';if(customerReadySoundEnabled)button.textContent='✓ تم تفعيل الصوت';return;}
       const {key}=await api('/api/public/push-key');const registration=await navigator.serviceWorker.register('/sw.js');let subscription=await registration.pushManager.getSubscription();
       if(!subscription)subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:decodeVapidKey(key)});
-      await api(`/api/public/orders/${encodeURIComponent(orderId)}/push`,{method:'POST',body:json({subscription:subscription.toJSON()})});button.textContent='✓ تم تفعيل تنبيه الجاهزية';button.disabled=true;hint.textContent='سيصلك إشعار عندما يغيّر المتجر حالة الطلب إلى جاهز.';
+      await api(`/api/public/orders/${encodeURIComponent(orderId)}/push`,{method:'POST',body:json({subscription:subscription.toJSON()})});button.textContent='✓ تم تفعيل الصوت والإشعارات';button.disabled=true;hint.textContent='سيعمل الصوت داخل الصفحة، وسيصلك إشعار عند جاهزية الطلب.';
     }catch(error){hint.textContent=error.message||'تعذر تفعيل الإشعار على هذا الجهاز.';}
   };
 }
