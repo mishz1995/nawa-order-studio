@@ -13,6 +13,7 @@ const editorFields = {
     ['name', '#bannerTitle, #screenShop, #screenFooterShop', 'اسم المتجر', 70],
     ['bannerText', '#bannerCopy', 'عبارة البانر', 90],
   ],
+  home: [],
   card: [
     ['name', '#orderShop', 'اسم المتجر', 70],
     ['cardColors.panel', '.customer-ticket-status', 'خلفية الحالة', 'color'],
@@ -73,7 +74,7 @@ const editorFields = {
   function renderPanel(){
     if(!panel)return;
     const node=selected&&targetDoc().querySelector(`[data-visual-key="${CSS.escape(selected)}"]`),edit=selectedEdit(),leaf=node?.children.length===0;
-    panel.innerHTML=`<header class="visual-editor-head"><div><strong>تحرير العنصر</strong><small>${node?`${node.tagName.toLowerCase()} · ${selected}`:'اختر عنصرًا من الصفحة'}</small></div><button type="button" class="visual-close" data-close aria-label="إغلاق">×</button></header>
+    panel.innerHTML=`<header class="visual-editor-head"><div><strong>تحرير العنصر</strong><small>${node?`${node.tagName.toLowerCase()} · ${selected}`:'اختر عنصرًا من الصفحة'}</small></div><div class="visual-editor-head-actions"><button type="button" class="visual-reset-page" data-reset-page data-no-drag>إرجاع الواجهة للافتراضي</button><button type="button" class="visual-close" data-close data-no-drag aria-label="إغلاق">×</button></div></header>
       ${node?`<div class="visual-editor-grid">
         ${leaf&&!['IMG','INPUT','TEXTAREA','SELECT'].includes(node.tagName)?field('النص','text','text',edit.text??node.textContent.trim(),'maxlength="160"'):''}
         ${['INPUT','TEXTAREA'].includes(node.tagName)?field('النص الإرشادي','placeholder','text',edit.placeholder??node.placeholder,'maxlength="160"'):''}
@@ -96,17 +97,18 @@ const editorFields = {
         ${node.tagName==='IMG'?`${field('النص البديل للصورة','alt','text',edit.alt??node.alt,'maxlength="160"')}<label class="visual-field"><span>ملاءمة الصورة</span><select data-prop="objectFit"><option value="contain">احتواء</option><option value="cover">ملء مع قص</option><option value="fill">تمدد</option></select></label>${field('موضع الصورة','objectPosition','select',edit.objectPosition||'center')}<label class="visual-field"><span>استبدال الصورة</span><input data-image="image" type="file" accept="image/png,image/jpeg,image/webp"></label>`:''}
         <label class="visual-field"><span>صورة خلفية للعنصر</span><input data-image="backgroundImage" type="file" accept="image/png,image/jpeg,image/webp"></label>
       </div><div class="visual-editor-actions"><button type="button" class="button soft" data-reset>مسح تعديلات العنصر</button><button type="button" class="button primary" data-save>حفظ ونشر</button></div><p class="visual-editor-note" role="status"></p>`:''}`;
-    panel.querySelector('[data-close]').onclick=()=>{if(Object.keys(draft).length&&!confirm('لديك تغييرات غير منشورة. هل تريد إغلاق المحرر؟'))return;stop();};
+    const closeButton=panel.querySelector('[data-close]');if(closeButton)closeButton.onclick=()=>{if(Object.keys(draft).length&&!confirm('لديك تغييرات غير منشورة. هل تريد إغلاق المحرر؟'))return;stop();};
+    const resetButton=panel.querySelector('[data-reset-page]');if(resetButton)resetButton.onclick=resetPage;
     panel.querySelectorAll('[data-prop]').forEach(input=>input.oninput=()=>{const prop=input.dataset.prop;let value=input.value;if(input.type==='number'){if(value===''||!Number.isFinite(Number(value)))return;const max=['width','height','minWidth','minHeight','maxWidth','maxHeight'].includes(prop)?1600:prop==='fontSize'?96:256,min=prop==='letterSpacing'?-20:0;value=Math.max(min,Math.min(max,Math.round(Number(value))));}else if(input.type==='color'&&!/^#[0-9a-f]{6}$/i.test(value))return;deleted.delete(selected);draft[selected]={...(draft[selected]||{}),[prop]:input.type==='number'?Number(value):value};if(input.type==='color'){const hex=panel.querySelector(`[data-color-hex="${prop}"]`);if(hex)hex.value=value;}if(input.type==='color'||input.type==='number'||['fontWeight','textAlign','display','objectFit','objectPosition','flexDirection','justifyContent','alignItems','boxShadow','textTransform'].includes(prop))applyOne(node,selectedEdit());else if(prop==='text'||prop==='placeholder'||prop==='alt')applyOne(node,selectedEdit());});
     panel.querySelectorAll('[data-color-hex]').forEach(input=>input.oninput=()=>{const value=input.value.trim();if(!/^#[0-9a-f]{6}$/i.test(value))return;const color=panel.querySelector(`[data-prop="${input.dataset.colorHex}"][type="color"]`);if(color){color.value=value;color.dispatchEvent(new Event('input',{bubbles:true}));}});
     panel.querySelectorAll('[data-transparent]').forEach(input=>input.onchange=()=>{const prop=input.dataset.transparent,color=panel.querySelector(`[data-prop="${prop}"][type="color"]`);deleted.delete(selected);draft[selected]={...(draft[selected]||{}),[prop]:input.checked?'transparent':color?.value||'#ffffff'};applyOne(node,selectedEdit());});
     panel.querySelectorAll('select[data-prop]').forEach(input=>{const p=input.dataset.prop,choices=p==='fontWeight'?['400','500','600','700','800']:p==='textAlign'?['start','center','end','left','right']:p==='borderStyle'?['none','solid','dashed','dotted']:p==='objectFit'?['contain','cover','fill','none','scale-down']:p==='objectPosition'?['center','top','bottom','left','right']:p==='flexDirection'?['row','row-reverse','column','column-reverse']:p==='justifyContent'?['start','center','end','space-between','space-around','space-evenly']:p==='alignItems'?['start','center','end','stretch','baseline']:p==='textTransform'?['none','uppercase','lowercase','capitalize']:p==='boxShadow'?['','none','soft','medium','strong']:['','none','block','flex','grid','inline','inline-flex'];input.innerHTML=choices.map(v=>`<option value="${v}">${v||'تلقائي'}</option>`).join('');input.value=edit[p]??(p==='fontWeight'?getComputedStyle(node).fontWeight:p==='textAlign'?getComputedStyle(node).textAlign:p==='borderStyle'?getComputedStyle(node).borderStyle:p==='objectFit'?getComputedStyle(node).objectFit:p==='objectPosition'?getComputedStyle(node).objectPosition:p==='flexDirection'?getComputedStyle(node).flexDirection:p==='justifyContent'?getComputedStyle(node).justifyContent:p==='alignItems'?getComputedStyle(node).alignItems:p==='textTransform'?getComputedStyle(node).textTransform:'');input.onchange=()=>{deleted.delete(selected);draft[selected]={...(draft[selected]||{})};if(!input.value){delete draft[selected][p];applyOne(node,selectedEdit());return;}draft[selected][p]=p==='fontWeight'?Number(input.value):input.value;applyOne(node,selectedEdit());};});
     panel.querySelectorAll('[data-image]').forEach(fileInput=>fileInput.addEventListener('change',async event=>{const file=event.target.files?.[0],property=event.target.dataset.image;if(!file||file.size>1_000_000){panel.querySelector('.visual-editor-note').textContent='حجم الصورة يجب ألا يتجاوز 1 ميغابايت.';return;}const reader=new FileReader();reader.onload=()=>{const image=String(reader.result||'');if(!/^data:image\/(?:webp|png|jpeg);base64,/.test(image))return;deleted.delete(selected);draft[selected]={...(draft[selected]||{}),[property]:image};applyOne(node,selectedEdit());};reader.readAsDataURL(file);}));
-    panel.querySelector('[data-reset]').onclick=()=>{delete draft[selected];deleted.add(selected);const base={...selectedContextEdits()};delete base[selected];apply(context.scope,base,targetDoc());select(node);};
-    panel.querySelector('[data-save]').onclick=save;
+    const resetElementButton=panel.querySelector('[data-reset]');if(resetElementButton)resetElementButton.onclick=()=>{delete draft[selected];deleted.add(selected);const base={...selectedContextEdits()};delete base[selected];apply(context.scope,base,targetDoc());select(node);};
+    const saveButton=panel.querySelector('[data-save]');if(saveButton)saveButton.onclick=save;
     const dragHandle=panel.querySelector('.visual-editor-head');
     dragHandle.onpointerdown=event=>{
-      if(event.target.closest('[data-close]')||event.button!==0)return;
+      if(event.target.closest('[data-no-drag]')||event.button!==0)return;
       const rect=panel.getBoundingClientRect();
       const offsetX=event.clientX-rect.left,offsetY=event.clientY-rect.top;
       panel.style.left=`${rect.left}px`;panel.style.top=`${rect.top}px`;panel.style.right='auto';panel.style.bottom='auto';
@@ -130,14 +132,39 @@ const editorFields = {
       draft={};deleted.clear();apply(context.scope,context.allEdits[context.scope],targetDoc());context.onSaved?.(context.allEdits);panel.querySelector('.visual-editor-note').textContent='تم نشر التعديلات.';toast('تم نشر التعديلات');renderPanel();
     }catch(error){panel.querySelector('.visual-editor-note').textContent=error.message;}
   }
+  async function resetPage(){
+    if(!context||!confirm('سيتم حذف كل تعديلات هذه الواجهة والرجوع إلى التصميم الافتراضي. هل تريد المتابعة؟'))return;
+    try{
+      const next={...(context.allEdits||{})};delete next[context.scope];
+      const payload={visualEdits:next};
+      if(context.layer==='shop'&&context.shopId&&['home','card','screen'].includes(context.scope)){
+        const cssSurface=context.scope==='home'?'store':context.scope;
+        if(context.customCss)payload.customCss={...context.customCss,[cssSurface]:''};
+        const result=await api(`/api/admin/shops/${encodeURIComponent(context.shopId)}`,{method:'PATCH',body:json(payload)});
+        context.allEdits=result.shop.visualEdits||{};context.customCss=result.shop.customCss||{};context.onSaved?.(context.allEdits);if(window.storeInfo?.id===context.shopId)window.storeInfo={...window.storeInfo,...result.shop};
+      }else if(context.layer==='site'){
+        const result=await api('/api/admin/settings',{method:'PATCH',body:json(payload)});context.allEdits=result.settings.visualEdits||{};window.siteVisualEdits=context.allEdits;context.onSaved?.(context.allEdits);
+      }else throw new Error('تعذر تحديد الواجهة لإعادة ضبطها.');
+      draft={};deleted.clear();const styleLink=targetDoc().querySelector('link[href*="/api/public/shop-style.css/"]');if(styleLink){const href=new URL(styleLink.href);href.searchParams.set('reset',String(Date.now()));styleLink.href=href.href;}apply(context.scope,{},targetDoc());clearSelection();renderPanel();panel.querySelector('.visual-editor-note').textContent='أُعيدت الواجهة إلى التصميم الافتراضي.';toast('أُعيدت الواجهة إلى التصميم الافتراضي');
+    }catch(error){panel.querySelector('.visual-editor-note').textContent=error.message;}
+  }
   window.applyInlineVisualEdits=apply;
-  window.startInlineVisualEditor=({scope,layer,shopId,allEdits={},targetDoc:targetDocument,onSaved})=>{
+  window.startInlineVisualEditor=({scope,layer,shopId,allEdits={},customCss,targetDoc:targetDocument,onSaved})=>{
     if(window.currentUser?.role!=='admin')return;
     if(active){if(Object.keys(draft).length&&!confirm('لديك تغييرات غير منشورة. هل تريد إغلاق المحرر؟'))return;stop();return;}
-    stop();context={scope,layer,shopId,onSaved,targetDoc:targetDocument||document,allEdits:JSON.parse(JSON.stringify(allEdits||{}))};draft={};deleted.clear();apply(scope,context.allEdits[scope]||{},targetDoc());
+    stop();context={scope,layer,shopId,onSaved,customCss:customCss?JSON.parse(JSON.stringify(customCss)):null,targetDoc:targetDocument||document,allEdits:JSON.parse(JSON.stringify(allEdits||{}))};draft={};deleted.clear();apply(scope,context.allEdits[scope]||{},targetDoc());
     active=true;targetDoc().body.classList.add('visual-editing');panel=document.createElement('aside');panel.className='visual-editor-panel';panel.dataset.visualTools='';panel.setAttribute('aria-label','تحرير عناصر الصفحة');document.body.append(panel);targetDoc().addEventListener('click',onPick,true);targetDoc().addEventListener('mouseover',onHover,true);if(targetDoc()!==document)document.addEventListener('click',parentNavigation,true);renderPanel();toast('اضغط على أي نص أو زر أو صورة أو بطاقة لتعديلها.');
   };
 })();
+
+function shopDashboardPreviewMarkup(shop){
+  const nav=[['home','◫','الطلبات'],['menu','☷','قائمة الأصناف'],['design','✳','تصميم المتجر']].filter(([id])=>(shop.visibleSections||['home','menu','design']).includes(id));
+  if(shop.chatEnabled!==false)nav.push(['chat','✉','التواصل مع الأدمن']);
+  const navMarkup=nav.map(([id,icon,label])=>`<button class="nav-item ${id==='home'?'active':''}" type="button"><span class="nav-ico">${icon}</span><span class="nav-text">${label}</span></button>`).join('');
+  const previewOrder=()=>`<article class="order-card"><div class="order-no">#1024</div><div><div class="order-title"><span class="subtle">أحمد · </span>لاتيه بارد</div><div class="order-meta">١٢:٤٥ م · تحضير نحو ٥ د</div></div><div class="order-status preparing">قيد التحضير</div><div class="status-actions"><button class="button lime" type="button">جاهز للاستلام</button></div></article>`;
+  const body=`${stats([['طلبات اليوم','12','منذ بداية اليوم'],['طلبات جديدة','2','بانتظار بدء التحضير'],['قيد التحضير','1','اضغط عند الجاهزية'],['جاهزة للاستلام','3','بانتظار التسليم']])}<div class="current-orders-head">${sectionHead('الطلبات الحالية','غيّر الحالة من بطاقة الطلب. حالة الطلب يديرها المتجر.',`<button class="button primary" type="button">＋ طلب جديد</button>`)}</div><div class="order-list" id="ordersList">${previewOrder()}</div><section class="completed-orders"><div class="completed-head"><strong>الطلبات المكتملة <span>4</span></strong><button class="mini-button del" type="button">تصفير المكتمل</button></div><details><summary>عرض الطلبات المكتملة</summary><div class="order-list">${previewOrder()}</div></details></section><div class="grid content-grid"><aside><div class="panel card" style="margin-top:13px"><div class="eyebrow">روابط سريعة</div><div class="form-stack" style="margin-top:12px"><a class="button soft" target="_blank" href="/screen/${encodeURIComponent(shop.slug||'')}">شاشة البانر وQR ↗</a><button class="button soft" type="button">تخصيص الهوية</button><button class="button soft" type="button">إدارة الأصناف</button></div></div></aside></div>${subscriptionNotice(shop)}`;
+  return `<div class="shell"><aside class="rail"><div class="brand">${shop.iconImage?`<img class="brand-shop-icon" src="${esc(shop.iconImage)}" alt="">`:''}<span>${esc(shop.name)}</span></div><div class="rail-label">${esc(brandCopy.workspaceLabel)}</div><nav class="rail-nav">${navMarkup}</nav><div class="rail-bottom"><strong>${esc(shop.name)}</strong>${esc(brandCopy.shopFooter)}<br>${esc(siteName)} · ${esc(brandCopy.workLabel)}</div></aside><main class="work"><header class="topline"><div><div class="eyebrow">مساحة المتجر</div><h1 class="page-title" id="pageTitle">إدارة الطلبات</h1></div><div class="top-actions"><button class="icon-button" type="button" aria-label="تحديث">↻</button><button class="button soft" type="button">خروج <span>↗</span></button></div></header><section id="view">${body}</section></main></div>`;
+}
 
 async function visualEditorView(user, selectedShop = '') {
   if (user.role !== 'admin') return;
@@ -149,11 +176,11 @@ async function visualEditorView(user, selectedShop = '') {
     return;
   }
   let shop = shops.find(item => item.id === selectedShop);
-  let surface = shop ? 'screen' : 'login';
+  let surface = shop ? 'home' : 'login';
   let draft = {};
   let frameDocument;
   let saving = false;
-  window.getInlineEditorContext=()=>({scope:shop?surface:'site:login',layer:shop?'shop':'site',shopId:shop?.id,allEdits:shop?.visualEdits||settings.visualEdits||{},targetDoc:document.getElementById('editorFrame')?.contentDocument,onSaved:edits=>{if(shop)shop.visualEdits=edits;else{settings.visualEdits=edits;window.siteVisualEdits=edits;}}});
+  window.getInlineEditorContext=()=>({scope:shop?surface:'site:login',layer:shop?'shop':'site',shopId:shop?.id,allEdits:shop?.visualEdits||settings.visualEdits||{},customCss:shop?.customCss,targetDoc:document.getElementById('editorFrame')?.contentDocument,onSaved:edits=>{if(shop)shop.visualEdits=edits;else{settings.visualEdits=edits;window.siteVisualEdits=edits;}}});
 
   shell(user, 'editor', `
     <div class="editor-toolbar">
@@ -164,7 +191,7 @@ async function visualEditorView(user, selectedShop = '') {
       </label>
       <label class="field" id="editorSurfaceField">واجهة المتجر
         <select class="input" id="editorSurface">
-          <option value="screen">شاشة البانر والطلبات</option><option value="card">بطاقة العميل</option>
+          <option value="home">صفحة إدارة الطلبات</option><option value="screen">شاشة البانر والطلبات</option><option value="card">بطاقة العميل</option>
         </select>
       </label>
       <div class="editor-actions">
@@ -233,6 +260,7 @@ async function visualEditorView(user, selectedShop = '') {
   }
 
   function selectField(path) {
+    if(surface==='home')return;
     element.value = path;
     const [, selector, label, kind] = selectedField();
     document.getElementById('editorValueLabel').textContent = label;
@@ -247,13 +275,17 @@ async function visualEditorView(user, selectedShop = '') {
   function renderPreview() {
     frameDocument = null;
     document.getElementById('editorSurfaceField').hidden = !shop;
+    document.querySelector('.editor-properties').hidden = surface==='home';
+    document.querySelector('.editor-actions').hidden = surface==='home';
     scope.value = shop?.id || '';
     surfaceInput.value = shop ? surface : 'screen';
     element.innerHTML = editorFields[surface].map(([path,, label]) => `<option value="${path}">${label}</option>`).join('');
-    selectField(element.value);
-    const markup = surface === 'login' ? loginMarkup() : surface === 'screen' ? screenMarkup() : orderMarkup();
-    const bodyClass = shop ? `${surface === 'card' ? 'customer' : 'screen'}-page ${themeClass(shop.theme)}` : '';
-    const shopStyle = shop?.customCssEnabled ? `<link rel="stylesheet" href="/api/public/shop-style.css/${encodeURIComponent(shop.slug)}/${surface}">` : '';
+    if(surface!=='home')selectField(element.value);
+    const homeMarkup=shop?shopDashboardPreviewMarkup(shop):'';
+    const markup = surface === 'login' ? loginMarkup() : surface === 'screen' ? screenMarkup() : surface === 'home' ? homeMarkup : orderMarkup();
+    const bodyClass = shop ? (surface==='home'?themeClass(shop.theme):`${surface === 'card' ? 'customer' : 'screen'}-page ${themeClass(shop.theme)}`) : '';
+    const cssSurface=surface==='home'?'store':surface;
+    const shopStyle = shop?.customCssEnabled ? `<link rel="stylesheet" href="/api/public/shop-style.css/${encodeURIComponent(shop.slug)}/${cssSurface}">` : '';
     frame.srcdoc = `<!doctype html><html lang="${document.documentElement.lang}" dir="${document.documentElement.dir}"><head>
       <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
       <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/feature.css">
@@ -297,7 +329,7 @@ async function visualEditorView(user, selectedShop = '') {
     frameDocument.querySelectorAll('input').forEach(field => { field.disabled = true; });
     paint();
     window.applyInlineVisualEdits?.(shop?surface:'site:login',(shop?.visualEdits||settings.visualEdits||{})[shop?surface:'site:login']||{},frameDocument);
-    selectField(element.value);
+    if(surface!=='home')selectField(element.value);
   };
 
   element.onchange = () => selectField(element.value);
@@ -311,7 +343,7 @@ async function visualEditorView(user, selectedShop = '') {
   scope.onchange = () => {
     if (!canLeave()) { scope.value = shop?.id || ''; return; }
     shop = shops.find(item => item.id === scope.value);
-    surface = shop ? 'screen' : 'login';
+    surface = shop ? 'home' : 'login';
     draft = {};
     renderPreview();
   };

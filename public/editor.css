@@ -28,6 +28,10 @@ body.visual-editing [data-visual-hover],body.visual-editing [data-visual-selecte
 .visual-editor-head{cursor:grab;touch-action:none;user-select:none}
 .visual-editor-panel[data-dragging] .visual-editor-head{cursor:grabbing}
 .visual-editor-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}
+.visual-editor-head-actions{display:flex;align-items:center;gap:8px}
+.visual-reset-page{border:1px solid #e4d4da;border-radius:10px;background:#fff6f8;color:#7c0e44;padding:7px 10px;font:inherit;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}
+.visual-reset-page:hover{background:#f8e8ee;border-color:#aa5e7a}
+.visual-reset-page:focus-visible,.visual-close:focus-visible{outline:3px solid #aa5e7a66;outline-offset:2px}
 .visual-editor-head strong{display:block;font-size:16px}.visual-editor-head small{display:block;margin-top:4px;color:#75666e;direction:ltr;text-align:right;overflow-wrap:anywhere;font-size:11px}
 .visual-close{width:34px;height:34px;border:1px solid #e5dce0;border-radius:50%;background:#fff;color:#4d2034;font-size:24px;line-height:1;cursor:pointer}
 .visual-editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -39,5 +43,5 @@ body.visual-editing [data-visual-hover],body.visual-editing [data-visual-selecte
 .visual-editor-note{margin:9px 0 0;color:#6f4657;font-size:12px;min-height:18px}
 .public-visual-edit{position:fixed;z-index:9998;inset-inline-end:16px;top:16px;box-shadow:0 8px 24px #24151d20}
 body.visual-editing [data-visual-tools],[data-visual-tools] *{cursor:auto!important}
-@media(max-width:600px){.visual-editor-panel{left:10px;top:76px;width:min(360px,calc(100vw - 20px));max-height:68vh;padding:14px;resize:both}.visual-editor-grid{gap:8px}.visual-editor-actions{position:sticky;bottom:-14px;background:#fffdfa;padding-block:10px 0}}
+@media(max-width:600px){.visual-editor-panel{left:10px;top:76px;width:min(360px,calc(100vw - 20px));max-height:68vh;padding:14px;resize:both}.visual-editor-grid{gap:8px}.visual-editor-head-actions{gap:5px}.visual-reset-page{padding:6px 8px;font-size:10px}.visual-editor-actions{position:sticky;bottom:-14px;background:#fffdfa;padding-block:10px 0}}
 @media(prefers-reduced-motion:reduce){body.visual-editing [data-visual-key]{transition:none}}
