@@ -1,0 +1,21 @@
+.editor-toolbar,.editor-actions{display:flex;gap:12px;align-items:end;flex-wrap:wrap}
+.editor-toolbar{margin-block-end:16px}
+.editor-toolbar .field{flex:1 1 170px}
+.editor-toolbar [hidden]{display:none}
+.editor-actions{margin-inline-start:auto}
+.editor-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(200px,250px);gap:16px;align-items:start}
+.editor-frame{display:block;width:100%;height:clamp(490px,70vh,790px);min-width:0;border:1px solid var(--line);border-radius:16px;background:var(--color-cotton)}
+.editor-properties .section-sub{margin:0;line-height:1.6}
+.editor-properties input[type=color]{padding:4px;height:42px;cursor:pointer}
+.editor-actions button:disabled{opacity:.55;cursor:default;transform:none}
+[data-editor-target]{cursor:crosshair}
+[data-editor-target]:hover,[data-editor-selected]{outline:2px solid #AA5E7A;outline-offset:-2px}
+[data-editor-selected]{outline-style:dashed}
+@media(max-width:820px){
+  .editor-layout{grid-template-columns:minmax(0,1fr)}
+  .editor-properties{grid-row:1}
+}
+@media(max-width:950px){
+  .login-wrap:has([data-editor-target]) .login-art{display:flex;min-height:260px;gap:20px;padding:24px}
+  .login-wrap:has([data-editor-target]) .login-side{min-height:auto}
+}
