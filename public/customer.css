@@ -184,6 +184,9 @@ body.customer-page .ticket-progress-step.current{color:var(--color-ticket-cream)
 body.customer-page .ticket-progress-step.current .ticket-progress-mark{border-color:var(--customer-card-accent,var(--color-accent));box-shadow:0 0 0 4px color-mix(in oklch,var(--customer-card-accent,var(--color-accent)) 28%,transparent)}
 body.customer-page .notification-setup{width:100%;min-height:48px;margin-top:auto;border:1px solid color-mix(in oklch,var(--color-ticket-cream) 88%,transparent);border-radius:9px;background:var(--color-ticket-cream);color:var(--color-ticket-wine);font-size:13px;font-weight:700}
 body.customer-page .notification-hint{margin:8px 0 0;color:color-mix(in oklch,var(--color-ticket-cream) 76%,transparent);font-size:10px;line-height:1.7;text-align:center}
+body.customer-page .notification-sound-setup{width:100%;min-height:40px;margin-top:8px;border:1px solid color-mix(in oklch,var(--color-ticket-cream) 55%,transparent);border-radius:9px;background:transparent;color:var(--color-ticket-cream);font-size:11px;font-weight:650}
+body.customer-page .notification-sound-setup[aria-pressed="true"]{border-color:var(--customer-card-accent,var(--color-accent));background:color-mix(in oklch,var(--customer-card-accent,var(--color-accent)) 18%,var(--color-ticket-wine));color:var(--color-ticket-cream)}
+body.customer-page .sound-hint{margin-top:4px;font-size:9px}
 body.customer-page .customer-ticket-status .review-btn{width:100%;margin-top:12px;border-color:color-mix(in oklch,var(--color-ticket-cream) 72%,transparent);border-radius:9px;background:transparent;color:var(--color-ticket-cream);font-size:12px}
 body.customer-page .customer-ticket-info{display:flex;flex-direction:column;align-items:center;min-width:0;padding:var(--customer-card-content-padding,16px);background:color-mix(in oklch,var(--customer-card-surface,var(--color-ticket-cream)) 88%,var(--color-ticket-side));color:var(--customer-card-text,var(--color-ticket-wine-type));direction:rtl;text-align:center}
 body.customer-page .customer-order-number{width:100%;display:grid;justify-items:center;gap:4px}
@@ -214,7 +217,7 @@ body.customer-page .customer-ticket.is-completed .ticket-store-logo{flex:1;min-h
 body.customer-page .customer-ticket--09,body.customer-page .customer-card--09{height:min(800px,calc(100svh - 24px));min-height:0;grid-template-columns:minmax(0,2fr) minmax(0,1fr);}
 body.customer-page .customer-ticket-status{min-height:0;overflow:auto;background:var(--customer-card-panel,var(--color-ticket-wine));}
 body.customer-page .customer-ticket-info{min-height:0;overflow:auto;background:var(--customer-card-surface,var(--color-ticket-cream));}
-body.customer-page .customer-ticket-brand,body.customer-page .ticket-status-body,body.customer-page .ticket-progress,body.customer-page .notification-setup,body.customer-page .notification-hint{flex-shrink:0}
+body.customer-page .customer-ticket-brand,body.customer-page .ticket-status-body,body.customer-page .ticket-progress,body.customer-page .notification-setup,body.customer-page .notification-hint,body.customer-page .notification-sound-setup{flex-shrink:0}
 body.customer-page .ticket-status-body{margin:clamp(8px,3vh,24px) clamp(4px,2vw,24px)}
 body.customer-page .ticket-progress-step{min-height:clamp(32px,7vh,52px);overflow-wrap:anywhere}
 body.customer-page .ticket-info-rule{flex:none;background:var(--customer-card-border,var(--color-rule))}
