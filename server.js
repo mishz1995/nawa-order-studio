@@ -240,7 +240,9 @@ const pruneAttempts = setInterval(() => { const now = Date.now(); for (const [ke
 pruneAttempts.unref();
 app.use('/api', async (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store');
-  const key = `nawa:rate:${req.ip}:${req.path}`;
+  const segments = req.path.split('/').filter(Boolean), root = segments[0] || 'other';
+  const routeGroup = ['auth', 'admin', 'shop', 'public'].includes(root) ? `${root}/${segments[1] || ''}` : 'other';
+  const key = `nawa:rate:${req.ip}:${routeGroup}`;
   const now = Date.now();
   const windowMs = req.path === '/auth/login' || req.path === '/auth/verify-2fa' ? 15 * 60_000 : 60_000;
   const limit = req.path === '/auth/login' || req.path === '/auth/verify-2fa' ? 10 : 180;
@@ -256,7 +258,11 @@ app.use('/api', async (req, res, next) => {
     }
   }
   let bucket = attempts.get(key);
-  if (!bucket || bucket.until < now) bucket = { count: 0, until: now + windowMs };
+  if (!bucket || bucket.until < now) {
+    if (attempts.size >= 20_000) for (const [bucketKey, current] of attempts) if (current.until < now) attempts.delete(bucketKey);
+    if (attempts.size >= 20_000) return res.status(429).json({ error: 'خدمة الحماية مشغولة، حاول لاحقاً' });
+    bucket = { count: 0, until: now + windowMs };
+  }
   if (++bucket.count > limit) return res.status(429).json({ error: 'محاولات كثيرة، حاول لاحقاً' });
   attempts.set(key, bucket);
   next();
