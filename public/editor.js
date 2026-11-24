@@ -38,7 +38,8 @@ const editorFields = {
     }
     return `path:${parts.join('/')}`;
   };
-  const targets=()=>[document.body,...document.body.querySelectorAll(editableSelector)].filter(node=>!node.closest('[data-visual-tools]')&&!node.closest('.language-toggle')&&!/^(SCRIPT|STYLE|LINK|META|TITLE|NOSCRIPT)$/.test(node.tagName)&&(node.children.length===0||/^(HTML|BODY|MAIN|ARTICLE|SECTION|ASIDE|HEADER|FOOTER|BUTTON|A|IMG|INPUT|TEXTAREA|SELECT|FORM|NAV|UL|OL|TABLE|THEAD|TBODY|TR|TD|TH|FIGURE|FIGCAPTION|DIV|SPAN|SVG|PATH)$/.test(node.tagName)));
+  const targets=(targetDoc=document)=>[targetDoc.body,...targetDoc.body.querySelectorAll(editableSelector)].filter(node=>!node.closest('[data-visual-tools]')&&!node.closest('.language-toggle')&&!/^(SCRIPT|STYLE|LINK|META|TITLE|NOSCRIPT)$/.test(node.tagName)&&(node.children.length===0||/^(HTML|BODY|MAIN|ARTICLE|SECTION|ASIDE|HEADER|FOOTER|BUTTON|A|IMG|INPUT|TEXTAREA|SELECT|FORM|NAV|UL|OL|TABLE|THEAD|TBODY|TR|TD|TH|FIGURE|FIGCAPTION|DIV|SPAN|SVG|PATH)$/.test(node.tagName)));
+  const targetDoc=()=>context?.targetDoc||document;
   const cssMap={color:'color',backgroundColor:'backgroundColor',borderColor:'borderColor',fill:'fill',stroke:'stroke',fontSize:'fontSize',fontWeight:'fontWeight',textAlign:'textAlign',textTransform:'textTransform',borderWidth:'borderWidth',borderStyle:'borderStyle',borderRadius:'borderRadius',padding:'padding',margin:'margin',width:'width',height:'height',minWidth:'minWidth',minHeight:'minHeight',maxWidth:'maxWidth',maxHeight:'maxHeight',gap:'gap',lineHeight:'lineHeight',letterSpacing:'letterSpacing',opacity:'opacity',display:'display',objectFit:'objectFit',objectPosition:'objectPosition',flexDirection:'flexDirection',justifyContent:'justifyContent',alignItems:'alignItems',boxShadow:'boxShadow'};
   function applyOne(node,edit={}){
     node.__visualOriginals ||= {styles:{},attrs:{},text:null};
@@ -55,28 +56,29 @@ const editorFields = {
     if(Object.hasOwn(edit,'placeholder'))node.placeholder=edit.placeholder;
     if(edit.backgroundImage)node.style.backgroundImage=`url("${edit.backgroundImage}")`;
   }
-  function apply(scope,edits={}){
+  function apply(scope,edits={},doc=document){
     if(!scope)return;
-    targets().forEach(node=>{const key=getKey(node);node.dataset.visualKey=key;applyOne(node,edits[key]||{});});
+    targets(doc).forEach(node=>{const key=getKey(node);node.dataset.visualKey=key;applyOne(node,edits[key]||{});});
   }
   function selectedEdit(){return deleted.has(selected)?{...draft[selected]}:{...(context.allEdits?.[context.scope]?.[selected]||{}),...(draft[selected]||{})};}
   const numberStyle=(node,key,fallback='')=>{const parsed=parseFloat(getComputedStyle(node)[key]);return Number.isFinite(parsed)?Math.round(parsed):fallback;};
-  function clearSelection(){document.querySelectorAll('[data-visual-selected]').forEach(n=>delete n.dataset.visualSelected);selected=null;}
+  function clearSelection(){targetDoc().querySelectorAll('[data-visual-selected]').forEach(n=>delete n.dataset.visualSelected);selected=null;}
   function closePanel(){panel?.remove();panel=null;}
-  function stop(){active=false;clearSelection();document.body.classList.remove('visual-editing');closePanel();document.removeEventListener('click',onPick,true);document.removeEventListener('mouseover',onHover,true);}
-  function onHover(event){document.querySelectorAll('[data-visual-hover]').forEach(n=>delete n.dataset.visualHover);if(event.target.closest('[data-visual-tools]'))return;const node=event.target.closest('[data-visual-key]');if(node)node.dataset.visualHover='';}
+  function parentNavigation(event){if(event.target.closest('#inlineEditToggle,#publicVisualEdit,[data-visual-tools]'))return;if(Object.keys(draft).length&&!confirm('لديك تغييرات غير منشورة. هل تريد مغادرة التحرير؟')){event.preventDefault();event.stopImmediatePropagation();return;}stop();}
+  function stop(){const doc=targetDoc();active=false;clearSelection();doc.body.classList.remove('visual-editing');closePanel();doc.removeEventListener('click',onPick,true);doc.removeEventListener('mouseover',onHover,true);if(doc!==document)document.removeEventListener('click',parentNavigation,true);}
+  function onHover(event){const doc=event.currentTarget;doc.querySelectorAll('[data-visual-hover]').forEach(n=>delete n.dataset.visualHover);if(event.target.closest('[data-visual-tools]'))return;const node=event.target.closest('[data-visual-key]');if(node)node.dataset.visualHover='';}
   function onPick(event){if(event.target.closest('[data-visual-tools]'))return;const node=event.target.closest('[data-visual-key]');if(!node){const isToggle=event.target.closest('#inlineEditToggle,#publicVisualEdit');if(!isToggle&&!event.target.closest('#view')){if(Object.keys(draft).length&&!confirm('لديك تغييرات غير منشورة. هل تريد مغادرة التحرير؟')){event.preventDefault();event.stopImmediatePropagation();return;}stop();}return;}event.preventDefault();event.stopPropagation();select(node);}
   function colorFor(node,property,fallback){const computed=getComputedStyle(node)[property];if(property==='backgroundColor'&&/^rgba\([^)]*,\s*0(?:\.0+)?\)$/.test(computed))return 'transparent';const match=computed?.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);if(match)return `#${match.slice(1,4).map(part=>Number(part).toString(16).padStart(2,'0')).join('')}`;try{const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');ctx.fillStyle='#000000';ctx.fillStyle=computed;ctx.fillRect(0,0,1,1);const [r,g,b]=ctx.getImageData(0,0,1,1).data;return `#${[r,g,b].map(part=>part.toString(16).padStart(2,'0')).join('')}`;}catch{return fallback;}}
   function field(label,key,type='text',value='',attrs='') {const escaped=String(value??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;'),hex=/^#[0-9a-f]{6}$/i.test(escaped)?escaped:'#ffffff';return `<label class="visual-field"><span>${label}</span>${type==='select'?`<select data-prop="${key}" ${attrs}><option value="${escaped}">${escaped||'تلقائي'}</option></select>`:type==='color'?`<div class="visual-color-controls"><input data-prop="${key}" type="color" value="${hex}"><input data-color-hex="${key}" type="text" inputmode="text" maxlength="7" value="${hex}" aria-label="قيمة HEX">${key==='backgroundColor'?`<span class="visual-transparent"><input data-transparent="${key}" type="checkbox" ${escaped==='transparent'?'checked':''}> شفاف</span>`:''}</div>`:`<input data-prop="${key}" type="${type}" value="${escaped}" ${attrs}>`}</label>`;}
   function renderPanel(){
     if(!panel)return;
-    const node=selected&&document.querySelector(`[data-visual-key="${CSS.escape(selected)}"]`),edit=selectedEdit(),leaf=node?.children.length===0;
+    const node=selected&&targetDoc().querySelector(`[data-visual-key="${CSS.escape(selected)}"]`),edit=selectedEdit(),leaf=node?.children.length===0;
     panel.innerHTML=`<header class="visual-editor-head"><div><strong>تحرير العنصر</strong><small>${node?`${node.tagName.toLowerCase()} · ${selected}`:'اختر عنصرًا من الصفحة'}</small></div><button type="button" class="visual-close" data-close aria-label="إغلاق">×</button></header>
       ${node?`<div class="visual-editor-grid">
         ${leaf&&!['IMG','INPUT','TEXTAREA','SELECT'].includes(node.tagName)?field('النص','text','text',edit.text??node.textContent.trim(),'maxlength="160"'):''}
         ${['INPUT','TEXTAREA'].includes(node.tagName)?field('النص الإرشادي','placeholder','text',edit.placeholder??node.placeholder,'maxlength="160"'):''}
         ${field('لون النص','color','color',edit.color||colorFor(node,'color','#171914'))}${field('لون الخلفية','backgroundColor','color',Object.hasOwn(edit,'backgroundColor')?edit.backgroundColor:colorFor(node,'backgroundColor','#ffffff'))}
-        ${field('لون تعبئة الأيقونة','fill','color',edit.fill||colorFor(node,'fill','#171914'))}${field('لون خط الأيقونة','stroke','color',edit.stroke||colorFor(node,'stroke','#171914'))}
+        ${node.namespaceURI==='http://www.w3.org/2000/svg'?`${field('لون تعبئة الأيقونة','fill','color',edit.fill||colorFor(node,'fill','#171914'))}${field('لون خط الأيقونة','stroke','color',edit.stroke||colorFor(node,'stroke','#171914'))}`:''}
         ${field('حجم الخط (px)','fontSize','number',edit.fontSize??numberStyle(node,'fontSize',16),'min="8" max="96"')}
         ${field('سماكة الخط','fontWeight','select',edit.fontWeight??getComputedStyle(node).fontWeight)}
         ${field('محاذاة النص','textAlign','select',edit.textAlign||getComputedStyle(node).textAlign)}${field('نمط الحد','borderStyle','select',edit.borderStyle||getComputedStyle(node).borderStyle)}
@@ -84,25 +86,23 @@ const editorFields = {
         ${field('تقويس الحد (px)','borderRadius','number',edit.borderRadius??numberStyle(node,'borderRadius'),'min="0" max="128"')}
         ${field('الحشو الداخلي (px)','padding','number',edit.padding??numberStyle(node,'padding'),'min="0" max="128"')}${field('الهامش (px)','margin','number',edit.margin??numberStyle(node,'margin'),'min="0" max="128"')}
         ${field('العرض (px)','width','number',edit.width??Math.round(node.getBoundingClientRect().width),'min="0" max="1600"')}${field('الارتفاع (px)','height','number',edit.height??Math.round(node.getBoundingClientRect().height),'min="0" max="1600"')}
-        ${field('أقل عرض (px)','minWidth','number',edit.minWidth??numberStyle(node,'minWidth'),'min="0" max="1600"')}${field('أقل ارتفاع (px)','minHeight','number',edit.minHeight??numberStyle(node,'minHeight'),'min="0" max="1600"')}
-        ${field('أعلى عرض (px)','maxWidth','number',edit.maxWidth??numberStyle(node,'maxWidth',''),'min="0" max="1600"')}${field('أعلى ارتفاع (px)','maxHeight','number',edit.maxHeight??numberStyle(node,'maxHeight',''),'min="0" max="1600"')}
         ${field('المسافة بين العناصر (px)','gap','number',edit.gap??numberStyle(node,'gap'),'min="0" max="256"')}${field('تباعد السطور (px)','lineHeight','number',edit.lineHeight??numberStyle(node,'lineHeight'),'min="0" max="256"')}
-        ${field('تباعد الأحرف (px)','letterSpacing','number',edit.letterSpacing??numberStyle(node,'letterSpacing'),'min="0" max="256"')}
+        ${field('تباعد الأحرف (px)','letterSpacing','number',edit.letterSpacing??numberStyle(node,'letterSpacing'),'min="-20" max="256"')}
         ${field('اتجاه العناصر','flexDirection','select',edit.flexDirection||getComputedStyle(node).flexDirection)}${field('توزيع العناصر','justifyContent','select',edit.justifyContent||getComputedStyle(node).justifyContent)}
         ${field('محاذاة العناصر','alignItems','select',edit.alignItems||getComputedStyle(node).alignItems)}${field('الظل','boxShadow','select',edit.boxShadow||'')}
         ${field('تحويل حالة الأحرف','textTransform','select',edit.textTransform||getComputedStyle(node).textTransform)}
         ${field('الشفافية %','opacity','number',edit.opacity??Math.round(parseFloat(getComputedStyle(node).opacity)*100),'min="0" max="100"')}
         ${field('الظهور','display','select',edit.display||'')}
-        ${node.tagName==='IMG'?`${field('النص البديل للصورة','alt','text',edit.alt??node.alt,'maxlength="160"')}<label class="visual-field"><span>ملاءمة الصورة</span><select data-prop="objectFit"><option value="contain">احتواء</option><option value="cover">ملء مع قص</option><option value="fill">تمدد</option></select></label><label class="visual-field"><span>استبدال الصورة</span><input data-image="image" type="file" accept="image/png,image/jpeg,image/webp"></label>`:''}
+        ${node.tagName==='IMG'?`${field('النص البديل للصورة','alt','text',edit.alt??node.alt,'maxlength="160"')}<label class="visual-field"><span>ملاءمة الصورة</span><select data-prop="objectFit"><option value="contain">احتواء</option><option value="cover">ملء مع قص</option><option value="fill">تمدد</option></select></label>${field('موضع الصورة','objectPosition','select',edit.objectPosition||'center')}<label class="visual-field"><span>استبدال الصورة</span><input data-image="image" type="file" accept="image/png,image/jpeg,image/webp"></label>`:''}
         <label class="visual-field"><span>صورة خلفية للعنصر</span><input data-image="backgroundImage" type="file" accept="image/png,image/jpeg,image/webp"></label>
       </div><div class="visual-editor-actions"><button type="button" class="button soft" data-reset>مسح تعديلات العنصر</button><button type="button" class="button primary" data-save>حفظ ونشر</button></div><p class="visual-editor-note" role="status"></p>`:''}`;
     panel.querySelector('[data-close]').onclick=()=>{if(Object.keys(draft).length&&!confirm('لديك تغييرات غير منشورة. هل تريد إغلاق المحرر؟'))return;stop();};
-    panel.querySelectorAll('[data-prop]').forEach(input=>input.oninput=()=>{const prop=input.dataset.prop;let value=input.value;if(input.type==='number'){if(value===''||!Number.isFinite(Number(value)))return;const max=['width','height','minWidth','minHeight','maxWidth','maxHeight'].includes(prop)?1600:prop==='fontSize'?96:256;value=Math.max(0,Math.min(max,Math.round(Number(value))));}else if(input.type==='color'&&!/^#[0-9a-f]{6}$/i.test(value))return;deleted.delete(selected);draft[selected]={...(draft[selected]||{}),[prop]:input.type==='number'?Number(value):value};if(input.type==='color'){const hex=panel.querySelector(`[data-color-hex="${prop}"]`);if(hex)hex.value=value;}if(input.type==='color'||input.type==='number'||['fontWeight','textAlign','display','objectFit','objectPosition','flexDirection','justifyContent','alignItems','boxShadow','textTransform'].includes(prop))applyOne(node,selectedEdit());else if(prop==='text'||prop==='placeholder'||prop==='alt')applyOne(node,selectedEdit());});
+    panel.querySelectorAll('[data-prop]').forEach(input=>input.oninput=()=>{const prop=input.dataset.prop;let value=input.value;if(input.type==='number'){if(value===''||!Number.isFinite(Number(value)))return;const max=['width','height','minWidth','minHeight','maxWidth','maxHeight'].includes(prop)?1600:prop==='fontSize'?96:256,min=prop==='letterSpacing'?-20:0;value=Math.max(min,Math.min(max,Math.round(Number(value))));}else if(input.type==='color'&&!/^#[0-9a-f]{6}$/i.test(value))return;deleted.delete(selected);draft[selected]={...(draft[selected]||{}),[prop]:input.type==='number'?Number(value):value};if(input.type==='color'){const hex=panel.querySelector(`[data-color-hex="${prop}"]`);if(hex)hex.value=value;}if(input.type==='color'||input.type==='number'||['fontWeight','textAlign','display','objectFit','objectPosition','flexDirection','justifyContent','alignItems','boxShadow','textTransform'].includes(prop))applyOne(node,selectedEdit());else if(prop==='text'||prop==='placeholder'||prop==='alt')applyOne(node,selectedEdit());});
     panel.querySelectorAll('[data-color-hex]').forEach(input=>input.oninput=()=>{const value=input.value.trim();if(!/^#[0-9a-f]{6}$/i.test(value))return;const color=panel.querySelector(`[data-prop="${input.dataset.colorHex}"][type="color"]`);if(color){color.value=value;color.dispatchEvent(new Event('input',{bubbles:true}));}});
     panel.querySelectorAll('[data-transparent]').forEach(input=>input.onchange=()=>{const prop=input.dataset.transparent,color=panel.querySelector(`[data-prop="${prop}"][type="color"]`);deleted.delete(selected);draft[selected]={...(draft[selected]||{}),[prop]:input.checked?'transparent':color?.value||'#ffffff'};applyOne(node,selectedEdit());});
     panel.querySelectorAll('select[data-prop]').forEach(input=>{const p=input.dataset.prop,choices=p==='fontWeight'?['400','500','600','700','800']:p==='textAlign'?['start','center','end','left','right']:p==='borderStyle'?['none','solid','dashed','dotted']:p==='objectFit'?['contain','cover','fill','none','scale-down']:p==='objectPosition'?['center','top','bottom','left','right']:p==='flexDirection'?['row','row-reverse','column','column-reverse']:p==='justifyContent'?['start','center','end','space-between','space-around','space-evenly']:p==='alignItems'?['start','center','end','stretch','baseline']:p==='textTransform'?['none','uppercase','lowercase','capitalize']:p==='boxShadow'?['','none','soft','medium','strong']:['','none','block','flex','grid','inline','inline-flex'];input.innerHTML=choices.map(v=>`<option value="${v}">${v||'تلقائي'}</option>`).join('');input.value=edit[p]??(p==='fontWeight'?getComputedStyle(node).fontWeight:p==='textAlign'?getComputedStyle(node).textAlign:p==='borderStyle'?getComputedStyle(node).borderStyle:p==='objectFit'?getComputedStyle(node).objectFit:p==='objectPosition'?getComputedStyle(node).objectPosition:p==='flexDirection'?getComputedStyle(node).flexDirection:p==='justifyContent'?getComputedStyle(node).justifyContent:p==='alignItems'?getComputedStyle(node).alignItems:p==='textTransform'?getComputedStyle(node).textTransform:'');input.onchange=()=>{deleted.delete(selected);draft[selected]={...(draft[selected]||{})};if(!input.value){delete draft[selected][p];applyOne(node,selectedEdit());return;}draft[selected][p]=p==='fontWeight'?Number(input.value):input.value;applyOne(node,selectedEdit());};});
     panel.querySelectorAll('[data-image]').forEach(fileInput=>fileInput.addEventListener('change',async event=>{const file=event.target.files?.[0],property=event.target.dataset.image;if(!file||file.size>1_000_000){panel.querySelector('.visual-editor-note').textContent='حجم الصورة يجب ألا يتجاوز 1 ميغابايت.';return;}const reader=new FileReader();reader.onload=()=>{const image=String(reader.result||'');if(!/^data:image\/(?:webp|png|jpeg);base64,/.test(image))return;deleted.delete(selected);draft[selected]={...(draft[selected]||{}),[property]:image};applyOne(node,selectedEdit());};reader.readAsDataURL(file);}));
-    panel.querySelector('[data-reset]').onclick=()=>{delete draft[selected];deleted.add(selected);const base={...selectedContextEdits()};delete base[selected];apply(context.scope,base);select(node);};
+    panel.querySelector('[data-reset]').onclick=()=>{delete draft[selected];deleted.add(selected);const base={...selectedContextEdits()};delete base[selected];apply(context.scope,base,targetDoc());select(node);};
     panel.querySelector('[data-save]').onclick=save;
   }
   function selectedContextEdits(){return context.allEdits?.[context.scope]||{};}
@@ -116,15 +116,15 @@ const editorFields = {
       if(context.layer==='site'){const result=await api('/api/admin/settings',{method:'PATCH',body:json(payload)});window.siteVisualEdits=result.settings.visualEdits;context.allEdits=window.siteVisualEdits;}
       else if(context.shopId){const result=await api(`/api/admin/shops/${encodeURIComponent(context.shopId)}`,{method:'PATCH',body:json(payload)});context.allEdits=result.shop.visualEdits;if(window.storeInfo?.id===context.shopId)window.storeInfo.visualEdits=context.allEdits;}
       else throw new Error('تعذر تحديد المتجر للحفظ.');
-      draft={};deleted.clear();apply(context.scope,context.allEdits[context.scope]);panel.querySelector('.visual-editor-note').textContent='تم نشر التعديلات.';toast('تم نشر التعديلات');renderPanel();
+      draft={};deleted.clear();apply(context.scope,context.allEdits[context.scope],targetDoc());context.onSaved?.(context.allEdits);panel.querySelector('.visual-editor-note').textContent='تم نشر التعديلات.';toast('تم نشر التعديلات');renderPanel();
     }catch(error){panel.querySelector('.visual-editor-note').textContent=error.message;}
   }
   window.applyInlineVisualEdits=apply;
-  window.startInlineVisualEditor=({scope,layer,shopId,allEdits={}})=>{
+  window.startInlineVisualEditor=({scope,layer,shopId,allEdits={},targetDoc:targetDocument,onSaved})=>{
     if(window.currentUser?.role!=='admin')return;
     if(active){if(Object.keys(draft).length&&!confirm('لديك تغييرات غير منشورة. هل تريد إغلاق المحرر؟'))return;stop();return;}
-    stop();context={scope,layer,shopId,allEdits:JSON.parse(JSON.stringify(allEdits||{}))};draft={};deleted.clear();apply(scope,context.allEdits[scope]||{});
-    active=true;document.body.classList.add('visual-editing');panel=document.createElement('aside');panel.className='visual-editor-panel';panel.dataset.visualTools='';panel.setAttribute('aria-label','تحرير عناصر الصفحة');document.body.append(panel);document.addEventListener('click',onPick,true);document.addEventListener('mouseover',onHover,true);renderPanel();toast('اضغط على أي نص أو زر أو صورة أو بطاقة لتعديلها.');
+    stop();context={scope,layer,shopId,onSaved,targetDoc:targetDocument||document,allEdits:JSON.parse(JSON.stringify(allEdits||{}))};draft={};deleted.clear();apply(scope,context.allEdits[scope]||{},targetDoc());
+    active=true;targetDoc().body.classList.add('visual-editing');panel=document.createElement('aside');panel.className='visual-editor-panel';panel.dataset.visualTools='';panel.setAttribute('aria-label','تحرير عناصر الصفحة');document.body.append(panel);targetDoc().addEventListener('click',onPick,true);targetDoc().addEventListener('mouseover',onHover,true);if(targetDoc()!==document)document.addEventListener('click',parentNavigation,true);renderPanel();toast('اضغط على أي نص أو زر أو صورة أو بطاقة لتعديلها.');
   };
 })();
 
@@ -142,6 +142,7 @@ async function visualEditorView(user, selectedShop = '') {
   let draft = {};
   let frameDocument;
   let saving = false;
+  window.getInlineEditorContext=()=>({scope:shop?surface:'site:login',layer:shop?'shop':'site',shopId:shop?.id,allEdits:shop?.visualEdits||settings.visualEdits||{},targetDoc:document.getElementById('editorFrame')?.contentDocument,onSaved:edits=>{if(shop)shop.visualEdits=edits;else{settings.visualEdits=edits;window.siteVisualEdits=edits;}}});
 
   shell(user, 'editor', `
     <div class="editor-toolbar">
@@ -284,6 +285,7 @@ async function visualEditorView(user, selectedShop = '') {
     frameDocument.addEventListener('submit', event => event.preventDefault());
     frameDocument.querySelectorAll('input').forEach(field => { field.disabled = true; });
     paint();
+    window.applyInlineVisualEdits?.(shop?surface:'site:login',(shop?.visualEdits||settings.visualEdits||{})[shop?surface:'site:login']||{},frameDocument);
     selectField(element.value);
   };
 
@@ -333,6 +335,7 @@ async function visualEditorView(user, selectedShop = '') {
         ({ settings } = await api('/api/admin/settings', { method:'PATCH', body:json(payload) }));
         siteName = settings.appName;
         brandCopy = settings.branding;
+        window.siteVisualEdits=settings.visualEdits||window.siteVisualEdits;
         syncPlatformIcon();
       }
       draft = {};

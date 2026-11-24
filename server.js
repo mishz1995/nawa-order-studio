@@ -338,7 +338,7 @@ const sanitizeVisualEdits = (raw) => {
           if (typeof value !== 'string' || !(property === 'backgroundColor' && value === 'transparent') && !/^#[0-9a-f]{6}$/i.test(value)) return null;
           safe[property] = value;
         } else if (sizeProps.has(property)) {
-          if (!Number.isInteger(value) || value < 0 || value > (['width','height','minWidth','minHeight','maxWidth','maxHeight'].includes(property) ? 1600 : property === 'fontSize' ? 96 : 256)) return null;
+          if (!Number.isInteger(value) || value < (property === 'letterSpacing' ? -20 : 0) || value > (['width','height','minWidth','minHeight','maxWidth','maxHeight'].includes(property) ? 1600 : property === 'fontSize' ? 96 : 256)) return null;
           safe[property] = value;
         } else if (property === 'opacity') {
           if (!Number.isInteger(value) || value < 0 || value > 100) return null;
@@ -509,7 +509,7 @@ const publicBranding = () => {
   for (const key of ['loginBackground', 'loginButtonColor']) if (typeof branding[key] !== 'string' || !/^#[0-9a-f]{6}$/i.test(branding[key])) branding[key] = defaultBranding[key];
   return branding;
 };
-app.get('/api/public/settings', (req, res) => res.json({ settings: { appName: db.settings.appName || 'نوى', branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, visualEdits: sanitizeVisualEdits(db.settings.visualEdits) || {} } }));
+app.get('/api/public/settings', (req, res) => { const visual=sanitizeVisualEdits(db.settings.visualEdits)||{}; res.json({ settings: { appName: db.settings.appName || 'نوى', branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, visualEdits: visual['site:login'] ? { 'site:login': visual['site:login'] } : {} } }); });
 app.get('/api/public/custom-style.css', (req, res) => {
   const preset = (db.settings.stylePresets || []).find((style) => style.id === db.settings.activeStyleId);
   res.setHeader('Cache-Control', 'no-store');

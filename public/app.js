@@ -102,7 +102,7 @@ function shell(user, active='home', body='') {
   const visualLayer=admin&&!visualShop?'site':'shop';
   const visualData=visualLayer==='site'?(window.siteVisualEdits||{}):(visualShop?.visualEdits||{});
   window.applyInlineVisualEdits?.(visualScope,visualData[visualScope]||{});
-  document.getElementById('inlineEditToggle')?.addEventListener('click',()=>window.startInlineVisualEditor?.({scope:visualScope,layer:visualLayer,shopId:visualShop?.id,allEdits:visualData}));
+  document.getElementById('inlineEditToggle')?.addEventListener('click',()=>{const special=window.getInlineEditorContext?.();window.startInlineVisualEditor?.(special||{scope:visualScope,layer:visualLayer,shopId:visualShop?.id,allEdits:visualData});});
 }
 function loginMarkup(){return `<main class="login-wrap"><section class="login-art" style="background-color:${esc(brandCopy.loginBackground||'')}">${platformBrand(brandCopy.loginBrandTag)}<h2 id="loginHeadline">${esc(brandCopy.loginHeadline)}</h2><p id="loginIntro">${esc(brandCopy.loginIntro)}</p><div class="art-mark" aria-hidden="true"><i></i><i></i><i></i></div><div class="art-foot" id="loginBrandTag">${esc(brandCopy.loginBrandTag)}</div></section><section class="login-side"><div class="login-box">${platformBrand('')}<h1 id="loginWelcome">${esc(brandCopy.loginWelcome||'مرحبًا بك')}</h1><p class="login-intro">${esc(brandCopy.loginPrompt||'سجّل الدخول إلى مساحة إدارة الطلبات')}</p><form id="loginForm" class="form-stack"><div class="field"><label for="username">اسم المستخدم</label><input class="input" id="username" name="username" autocomplete="username" placeholder="مثال: admin" required></div><div class="field"><label for="password">كلمة المرور</label><input class="input" id="password" name="password" type="password" autocomplete="current-password" placeholder="أدخل كلمة المرور" required></div><div class="error" id="loginError"></div><button class="button primary" type="submit" style="background-color:${esc(brandCopy.loginButtonColor||'')}"><span id="loginButtonLabel">${esc(brandCopy.loginButtonLabel||'دخول إلى لوحة العمل')}</span> <span>←</span></button></form><div class="secure-note"><span>◈</span><span>اتصال خاص وجلسة آمنة. أنشئ حسابات المتاجر من لوحة الأدمن.</span></div></div></section></main>`;}
 function login(initialMessage='') {
@@ -134,6 +134,7 @@ async function adminSettingsView(user){
   document.getElementById('disableAdmin2fa')?.addEventListener('click',async()=>{const currentPassword=prompt('كلمة المرور الحالية'),code=prompt('رمز تطبيق المصادقة');if(!currentPassword||!code)return;try{await api('/api/admin/2fa/disable',{method:'POST',body:json({currentPassword,code})});toast('تم إيقاف التحقق بخطوتين');adminSettingsView(user);}catch(err){toast(err.message);}});
 }
 async function adminView(page='home',user={username:'admin',role:'admin'}) {
+  if(page!=='editor')window.getInlineEditorContext=null;
   if(page!=='orders')window.adminShop=null;
   if(page==='editor') return visualEditorView(user);
   if(page==='settings') return adminSettingsView(user);
@@ -349,7 +350,7 @@ async function screenPage(slug){
 }
 async function boot(){
   const [,userData,publicSettings]=await Promise.all([document.fonts?.ready||Promise.resolve(),api('/api/auth/me').catch(()=>({user:null})),api('/api/public/settings').catch(()=>({settings:{appName:'نوى'}}))]);
-  window.currentUser=userData.user||null;window.siteVisualEdits=publicSettings.settings?.visualEdits||{};
+  window.currentUser=userData.user||null;window.siteVisualEdits=publicSettings.settings?.visualEdits||{};if(window.currentUser?.role==='admin'){const adminData=await api('/api/admin/settings');window.siteVisualEdits=adminData.settings.visualEdits||{};}
   siteName=publicSettings.settings?.appName||'نوى';brandCopy={...defaultBrandCopy,...publicSettings.settings?.branding};siteIcon=brandCopy.appIcon||'';textOverrides=publicSettings.settings?.textOverrides||{};syncSiteIdentity();
   if(!document.getElementById('customStyleLink')){const styleLink=document.createElement('link');styleLink.id='customStyleLink';styleLink.rel='stylesheet';styleLink.href=`/api/public/custom-style.css?rev=${Date.now()}`;document.head.append(styleLink);}
   applyTextOverrides();if(!window.__nawaCopyObserver){window.__nawaCopyObserver=new MutationObserver(()=>applyTextOverrides());window.__nawaCopyObserver.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['aria-label','title','placeholder','alt']});}
