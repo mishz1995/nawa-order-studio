@@ -160,9 +160,12 @@ function normalizeAndSeedDb() {
   if (typeof db.settings.appName !== 'string' || !db.settings.appName.trim()) { db.settings.appName = 'نوى'; changed = true; }
   if (!db.settings.branding || typeof db.settings.branding !== 'object') { db.settings.branding = {}; changed = true; }
   if (!Array.isArray(db.settings.stylePresets)) { db.settings.stylePresets = []; changed = true; }
+  const rawCustomThemes = Array.isArray(db.settings.customThemes) ? db.settings.customThemes : [];
+  const normalizedThemes = rawCustomThemes.map((theme) => safeCustomTheme(theme)).filter(Boolean).slice(0, 30);
+  if (!Array.isArray(db.settings.customThemes) || JSON.stringify(normalizedThemes) !== JSON.stringify(rawCustomThemes)) { db.settings.customThemes = normalizedThemes; changed = true; }
   if (typeof db.settings.activeStyleId !== 'string') { db.settings.activeStyleId = ''; changed = true; }
   if (typeof db.settings.adminDisplayName !== 'string') { db.settings.adminDisplayName = ''; changed = true; }
-  if (typeof db.settings.adminTheme !== 'string' || !['studio','court','matcha','cerulean','sandstone','slate','minty','pulse','darkly'].includes(db.settings.adminTheme)) { db.settings.adminTheme = 'studio'; changed = true; }
+  if (typeof db.settings.adminTheme !== 'string' || !isKnownTheme(db.settings.adminTheme)) { db.settings.adminTheme = 'studio'; changed = true; }
   if (!db.settings.textOverrides || typeof db.settings.textOverrides !== 'object' || Array.isArray(db.settings.textOverrides)) { db.settings.textOverrides = {}; changed = true; }
   for (const shop of db.shops) {
     if (!Array.isArray(shop.visibleSections)) { shop.visibleSections = [...allShopSections]; changed = true; }
@@ -386,6 +389,27 @@ const googleUrl = (value) => {
   } catch { return null; }
 };
 const themes = ['studio', 'court', 'matcha', 'cerulean', 'sandstone', 'slate', 'minty', 'pulse', 'darkly'];
+const themeColorKeys = ['surface', 'text', 'accent', 'accentText', 'card', 'panel', 'panelText', 'sidebar', 'sidebarText', 'border', 'muted'];
+const safeCustomTheme = (raw, id = raw?.id) => {
+  if (!raw || typeof raw !== 'object' || !/^custom-[a-f0-9]{12}$/.test(String(id || ''))) return null;
+  const name = cleanText(raw.name, 40), hint = cleanText(raw.hint || '', 80);
+  if (name.length < 2 || !raw.colors || typeof raw.colors !== 'object' || Array.isArray(raw.colors)) return null;
+  const colors = {};
+  for (const key of themeColorKeys) {
+    const value = raw.colors[key];
+    if (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value)) return null;
+    colors[key] = value.toLowerCase();
+  }
+  return { id, name, hint, colors, updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : Date.now() };
+};
+const customThemeById = (id) => db.settings?.customThemes?.find((theme) => theme.id === id) || null;
+const isKnownTheme = (id) => themes.includes(id) || Boolean(customThemeById(id));
+const publicThemeCatalog = () => (db.settings?.customThemes || []).map(({ id, name, hint, colors, updatedAt }) => ({ id, name, hint, colors, updatedAt }));
+function customThemeStyles(theme) {
+  const c = theme.colors, selector = `.theme-${theme.id}`, adminSelector = `html[data-admin-theme="${theme.id}"]`;
+  const vars = `--store-bg:${c.surface};--store-ink:${c.text};--store-accent:${c.accent};--store-card:${c.card};--color-paper:${c.surface};--color-paper-2:color-mix(in srgb,${c.surface} 90%,${c.text});--color-paper-3:color-mix(in srgb,${c.surface} 82%,${c.text});--color-ink:${c.text};--color-ink-2:${c.text};--color-muted:${c.muted};--color-rule:${c.border};--color-rule-2:${c.border};--color-accent:${c.accent};--color-accent-ink:${c.accentText};--color-accent-2:${c.accent};--color-focus:${c.accent};--color-cotton:${c.card};--color-ticket-wine:${c.panel};--color-ticket-cream:${c.panelText};--color-ticket-side:${c.surface};--color-ticket-wine-type:${c.text};--customer-card-surface:${c.card};--customer-card-text:${c.text};--customer-card-accent:${c.accent};--customer-card-border:${c.border};--customer-card-panel:${c.panel};--ink:${c.text};--lime:${c.accent};--line:${c.border};--muted:${c.muted};--color-ref-171914:${c.sidebar};--color-ref-161810:${c.sidebar};--color-ref-292b24:color-mix(in srgb,${c.sidebar} 82%,${c.sidebarText});--color-ref-2d3028:color-mix(in srgb,${c.sidebar} 72%,${c.sidebarText});--color-ref-fff:${c.card};--color-ref-aaada4:color-mix(in srgb,${c.sidebarText} 76%,${c.sidebar});--color-ref-96998f:color-mix(in srgb,${c.sidebarText} 62%,${c.sidebar});--color-ref-7f8278:color-mix(in srgb,${c.sidebarText} 50%,${c.sidebar});--color-ref-f6f6f3:${c.surface};--color-ref-fff1ee:color-mix(in srgb,${c.accent} 18%,${c.card});--color-ref-303229:${c.text};--color-ref-33362d:${c.accent};--color-ref-c7f36a:${c.accent};--color-ref-e4e6de:${c.border};--color-ref-edf0e7:${c.surface};--color-ref-eef4e8:${c.surface};--color-ref-f8f9f6:${c.surface};--color-ref-e7eadf:${c.surface};--color-ref-eff0eb:${c.border}`;
+  return `${selector},html${selector}{${vars}}${adminSelector}{${vars};--color-ref-171914:${c.sidebar};--color-ref-fff:${c.card};--color-ref-292b24:color-mix(in srgb,${c.sidebar} 82%,${c.sidebarText});--color-ref-2d3028:color-mix(in srgb,${c.sidebar} 72%,${c.sidebarText})}${adminSelector} .primary{background:${c.accent};color:${c.accentText}}${adminSelector} .primary:hover{background:color-mix(in srgb,${c.accent} 82%,${c.text})}${adminSelector} .rail{color:${c.sidebarText}}${adminSelector} .rail .brand,${adminSelector} .rail .nav-item.active,${adminSelector} .rail .nav-item:hover,${adminSelector} .rail .rail-bottom strong{color:${c.sidebarText}}`;
+}
 const statuses = ['queued', 'preparing', 'ready', 'completed'];
 const statusLabels = { queued: 'استلمنا طلبك', preparing: 'جاري التحضير', ready: 'جاهز للاستلام', completed: 'تم التسليم' };
 
@@ -446,6 +470,12 @@ app.get('/api/public/shop-style.css/:slug/:surface', (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.type('text/css').send(css);
 });
+app.get('/api/public/themes.css/:id', (req, res) => {
+  const theme = customThemeById(req.params.id);
+  if (!theme) return res.status(404).type('text/plain').send('Theme not found');
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('text/css').send(customThemeStyles(theme));
+});
 app.get('/api/public/manifest.webmanifest', (req, res) => {
   const appName = db.settings.appName || 'نوى';
   const appIcon = publicBranding().appIcon;
@@ -455,9 +485,38 @@ app.get('/api/public/manifest.webmanifest', (req, res) => {
 });
 
 app.get('/api/admin/shops', requireLogin, requireAdmin, (req, res) => res.json({ shops: db.shops.map(safeShop) }));
+app.post('/api/admin/themes', requireLogin, requireAdmin, async (req, res) => {
+  if (db.settings.customThemes.length >= 30) return res.status(400).json({ error: 'وصلت إلى الحد الأقصى وهو 30 ثيمًا مخصصًا' });
+  const id = `custom-${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`;
+  const theme = safeCustomTheme(req.body, id);
+  if (!theme) return res.status(400).json({ error: 'تحقق من الاسم والألوان؛ يجب أن تكون الألوان بصيغة HEX مثل #203040' });
+  if (db.settings.customThemes.some((item) => item.name.toLocaleLowerCase() === theme.name.toLocaleLowerCase())) return res.status(409).json({ error: 'يوجد ثيم بهذا الاسم بالفعل' });
+  db.settings.customThemes.push(theme);
+  await saveDb();
+  res.status(201).json({ theme, customThemes: publicThemeCatalog() });
+});
+app.patch('/api/admin/themes/:id', requireLogin, requireAdmin, async (req, res) => {
+  const index = db.settings.customThemes.findIndex((item) => item.id === req.params.id);
+  if (index < 0) return res.status(404).json({ error: 'الثيم المخصص غير موجود' });
+  const theme = safeCustomTheme(req.body, req.params.id);
+  if (!theme) return res.status(400).json({ error: 'تحقق من الاسم والألوان؛ يجب أن تكون الألوان بصيغة HEX مثل #203040' });
+  if (db.settings.customThemes.some((item, itemIndex) => itemIndex !== index && item.name.toLocaleLowerCase() === theme.name.toLocaleLowerCase())) return res.status(409).json({ error: 'يوجد ثيم بهذا الاسم بالفعل' });
+  theme.updatedAt = Date.now();
+  db.settings.customThemes[index] = theme;
+  await saveDb();
+  res.json({ theme, customThemes: publicThemeCatalog() });
+});
+app.delete('/api/admin/themes/:id', requireLogin, requireAdmin, async (req, res) => {
+  const theme = customThemeById(req.params.id);
+  if (!theme) return res.status(404).json({ error: 'الثيم المخصص غير موجود' });
+  if (db.settings.adminTheme === theme.id || db.shops.some((shop) => shop.theme === theme.id)) return res.status(409).json({ error: 'هذا الثيم مستخدم؛ غيّر الثيم في لوحة الأدمن والمتاجر أولاً' });
+  db.settings.customThemes = db.settings.customThemes.filter((item) => item.id !== theme.id);
+  await saveDb();
+  res.json({ ok: true, customThemes: publicThemeCatalog() });
+});
 app.get('/api/admin/settings', requireLogin, requireAdmin, (req, res) => {
   const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
-  res.json({ settings: { appName: db.settings.appName || 'نوى', adminDisplayName: db.settings.adminDisplayName || '', adminTheme: db.settings.adminTheme || 'studio', branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '', twoFactorEnabled: Boolean(admin?.totpSecret) } });
+  res.json({ settings: { appName: db.settings.appName || 'نوى', adminDisplayName: db.settings.adminDisplayName || '', adminTheme: db.settings.adminTheme || 'studio', customThemes: publicThemeCatalog(), branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '', twoFactorEnabled: Boolean(admin?.totpSecret) } });
 });
 app.post('/api/admin/password', requireLogin, requireAdmin, async (req, res) => {
   const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
@@ -506,7 +565,7 @@ app.post('/api/admin/2fa/disable', requireLogin, requireAdmin, async (req, res) 
   res.json({ ok: true });
 });
 app.patch('/api/admin/settings', requireLogin, requireAdmin, async (req, res) => {
-  if (req.body?.adminTheme !== undefined && !themes.includes(req.body.adminTheme)) return res.status(400).json({ error: 'الثيم المحدد غير موجود في المكتبة' });
+  if (req.body?.adminTheme !== undefined && !isKnownTheme(req.body.adminTheme)) return res.status(400).json({ error: 'الثيم المحدد غير موجود في المكتبة' });
   const appName = req.body?.appName === undefined ? db.settings.appName : cleanText(req.body.appName, 40);
   if (typeof appName !== 'string' || appName.length < 2) return res.status(400).json({ error: 'اسم الموقع يجب أن يكون حرفين على الأقل' });
   db.settings.appName = appName;
@@ -553,17 +612,17 @@ app.patch('/api/admin/settings', requireLogin, requireAdmin, async (req, res) =>
     db.settings.activeStyleId = activeStyleId;
   }
   await saveDb();
-  res.json({ settings: { appName, adminDisplayName: db.settings.adminDisplayName || '', adminTheme: db.settings.adminTheme || 'studio', branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '' } });
+  res.json({ settings: { appName, adminDisplayName: db.settings.adminDisplayName || '', adminTheme: db.settings.adminTheme || 'studio', customThemes: publicThemeCatalog(), branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '' } });
 });
 app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
   const name = cleanText(req.body?.name, 70);
   const username = cleanText(req.body?.username, 40);
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
   const reviewUrl = req.body?.reviewUrl ? googleUrl(req.body.reviewUrl) : '';
-  const theme = themes.includes(req.body?.theme) ? req.body.theme : 'studio';
+  const theme = req.body?.theme === undefined ? 'studio' : isKnownTheme(req.body.theme) ? req.body.theme : null;
   const orderMode = ['catalog','custom'].includes(req.body?.orderMode) ? req.body.orderMode : 'catalog';
   const subscriptionEndDate = req.body?.subscriptionEndDate;
-  if (name.length < 2 || !/^[A-Za-z0-9_.-]{3,40}$/.test(username) || !validPassword(password) || !validSubscriptionDate(subscriptionEndDate)) return res.status(400).json({ error: 'تحقق من بيانات المتجر وحدد تاريخ انتهاء اشتراك صالحًا' });
+  if (name.length < 2 || !/^[A-Za-z0-9_.-]{3,40}$/.test(username) || !validPassword(password) || !validSubscriptionDate(subscriptionEndDate) || !theme) return res.status(400).json({ error: 'تحقق من بيانات المتجر والثيم المحدد وتاريخ انتهاء الاشتراك' });
   if (db.shops.some((s) => s.username === username) || db.users.some((u) => u.username === username)) return res.status(409).json({ error: 'اسم المستخدم مستخدم من قبل' });
   if (req.body?.reviewUrl && !reviewUrl) return res.status(400).json({ error: 'أدخل رابط Google Maps آمن يبدأ بـ HTTPS' });
   const customCss = req.body?.customCss === undefined ? { store: '', card: '', screen: '' } : sanitizeShopCssSet(req.body.customCss);
@@ -594,7 +653,7 @@ app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) =
     if (req.body.reviewUrl && !url) return res.status(400).json({ error: 'أدخل رابط Google Maps آمن يبدأ بـ HTTPS' });
     shop.reviewUrl = url;
   }
-  if (req.body?.theme !== undefined && themes.includes(req.body.theme)) shop.theme = req.body.theme;
+  if (req.body?.theme !== undefined) { if (!isKnownTheme(req.body.theme)) return res.status(400).json({ error: 'الثيم المحدد غير موجود في المكتبة' }); shop.theme = req.body.theme; }
   if (req.body?.orderMode !== undefined && ['catalog','custom'].includes(req.body.orderMode)) shop.orderMode = req.body.orderMode;
   if (req.body?.bannerText !== undefined) shop.bannerText = cleanText(req.body.bannerText, 90);
   for (const key of ['bannerImage', 'iconImage']) if (req.body?.[key] !== undefined) {
@@ -675,7 +734,7 @@ app.delete('/api/admin/shops/:id/items/:itemId', requireLogin, requireAdmin, (re
 });
 
 app.get('/api/shop/orders', requireLogin, requireShop, (req, res) => res.json({ orders: db.orders.filter((o) => o.shopId === req.shop.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(safeOrder) }));
-app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), cardColors: safeColors(req.shop.cardColors), cardStyle: safeCardStyle(req.shop.cardStyle), visibleSections: shopSections(req.shop), chatEnabled: req.shop.chatEnabled !== false, subscriptionEndDate: validSubscriptionDate(req.shop.subscriptionEndDate) ? req.shop.subscriptionEndDate : '', subscriptionDaysRemaining: subscriptionDaysRemaining(req.shop) } }));
+app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, customThemes: publicThemeCatalog(), orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), cardColors: safeColors(req.shop.cardColors), cardStyle: safeCardStyle(req.shop.cardStyle), visibleSections: shopSections(req.shop), chatEnabled: req.shop.chatEnabled !== false, subscriptionEndDate: validSubscriptionDate(req.shop.subscriptionEndDate) ? req.shop.subscriptionEndDate : '', subscriptionDaysRemaining: subscriptionDaysRemaining(req.shop) } }));
 async function createOrderForShop(shop, body, res) {
   const customerName = cleanText(body?.customerName, 60);
   let item = '', items = [], prepMinutes = 0;
@@ -756,7 +815,7 @@ app.post('/api/shop/items', requireLogin, requireShop, (req, res) => manageShopI
 app.patch('/api/shop/items/:itemId', requireLogin, requireShop, (req, res) => manageShopItems(req.shop, req, res));
 app.delete('/api/shop/items/:itemId', requireLogin, requireShop, (req, res) => manageShopItems(req.shop, req, res));
 app.patch('/api/shop/settings', requireLogin, requireShop, async (req, res) => {
-  if (themes.includes(req.body?.theme)) req.shop.theme = req.body.theme;
+  if (req.body?.theme !== undefined) { if (!isKnownTheme(req.body.theme)) return res.status(400).json({ error: 'الثيم المحدد غير موجود في المكتبة' }); req.shop.theme = req.body.theme; }
   if (req.body?.bannerText !== undefined) req.shop.bannerText = cleanText(req.body.bannerText, 90);
   await saveDb(); res.json({ shop: safeShop(req.shop) });
 });
