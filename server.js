@@ -160,6 +160,9 @@ function normalizeAndSeedDb() {
   if (typeof db.settings.appName !== 'string' || !db.settings.appName.trim()) { db.settings.appName = 'نوى'; changed = true; }
   if (!db.settings.branding || typeof db.settings.branding !== 'object') { db.settings.branding = {}; changed = true; }
   if (!Array.isArray(db.settings.stylePresets)) { db.settings.stylePresets = []; changed = true; }
+  const rawFonts = Array.isArray(db.settings.customFonts) ? db.settings.customFonts : [];
+  const normalizedFonts = rawFonts.map((font) => safeCustomFont(font)).filter(Boolean).slice(0, 4);
+  if (!Array.isArray(db.settings.customFonts) || JSON.stringify(normalizedFonts) !== JSON.stringify(rawFonts)) { db.settings.customFonts = normalizedFonts; changed = true; }
   const rawCustomThemes = Array.isArray(db.settings.customThemes) ? db.settings.customThemes : [];
   const normalizedThemes = rawCustomThemes.map((theme) => safeCustomTheme(theme)).filter(Boolean).slice(0, 30);
   if (!Array.isArray(db.settings.customThemes) || JSON.stringify(normalizedThemes) !== JSON.stringify(rawCustomThemes)) { db.settings.customThemes = normalizedThemes; changed = true; }
@@ -172,8 +175,6 @@ function normalizeAndSeedDb() {
     if (typeof shop.chatEnabled !== 'boolean') { shop.chatEnabled = true; changed = true; }
     if (typeof shop.customCssEnabled !== 'boolean') { shop.customCssEnabled = true; changed = true; }
     if (!shop.customCss || typeof shop.customCss !== 'object') { shop.customCss = { store: '', card: '', screen: '' }; changed = true; }
-    if (!shop.cardColors || typeof shop.cardColors !== 'object') { shop.cardColors = { ...defaultCardColors }; changed = true; }
-    if (!shop.cardStyle || typeof shop.cardStyle !== 'object') { shop.cardStyle = { ...defaultCardStyle }; changed = true; }
     if (typeof shop.bannerImage !== 'string') { shop.bannerImage = ''; changed = true; }
     if (typeof shop.iconImage !== 'string') { shop.iconImage = ''; changed = true; }
     if (!['catalog', 'custom'].includes(shop.orderMode)) { shop.orderMode = 'catalog'; changed = true; }
@@ -261,8 +262,6 @@ app.use('/api', async (req, res, next) => {
   next();
 });
 const allShopSections = ['home', 'menu', 'design'];
-const defaultCardColors = { surface: '#ffffff', text: '#22251f', accent: '#c94f3d', border: '#e8e6e1', panel: '#641b2b' };
-const defaultCardStyle = { padding: 16, radius: 28, scale: 100, shadow: 10 };
 const shopCssScopes = { store: ['.shell', '.modal-backdrop', '.direct-chat', '.toast'], card: ['body.customer-page', '.customer-ticket'], screen: ['body.screen-page', '.signage'] };
 const validateShopCssRules = (source, scope) => {
   let index = 0;
@@ -318,7 +317,6 @@ const sanitizeShopCssSet = (value) => {
 };
 const safeImage = (value) => typeof value === 'string' && value.length <= 1_500_000 && /^data:image\/(?:webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : '';
 const shopSections = (shop) => Array.isArray(shop.visibleSections) ? shop.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections];
-const safeColors = (value) => Object.fromEntries(Object.entries(defaultCardColors).map(([key, fallback]) => [key, typeof value?.[key] === 'string' && /^#[0-9a-f]{6}$/i.test(value[key]) ? value[key] : fallback]));
 const validSubscriptionDate = (value) => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number);
@@ -335,9 +333,8 @@ const subscriptionDaysRemaining = (shop, now = Date.now()) => {
   return expiresAt === null ? null : Math.max(0, Math.ceil((expiresAt - now) / 86_400_000));
 };
 const subscriptionExpired = (shop, now = Date.now()) => subscriptionDaysRemaining(shop, now) === 0;
-const safeCardStyle = (value) => ({ padding: Number.isInteger(value?.padding) && value.padding >= 0 && value.padding <= 48 ? value.padding : defaultCardStyle.padding, radius: Number.isInteger(value?.radius) && value.radius >= 14 && value.radius <= 40 ? value.radius : defaultCardStyle.radius, scale: Number.isInteger(value?.scale) && value.scale >= 90 && value.scale <= 115 ? value.scale : defaultCardStyle.scale, shadow: Number.isInteger(value?.shadow) && value.shadow >= 0 && value.shadow <= 30 ? value.shadow : defaultCardStyle.shadow });
-const safeShop = (shop) => { const remaining = subscriptionDaysRemaining(shop); const expired = remaining === 0; return { id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active && !expired, subscriptionEndDate: validSubscriptionDate(shop.subscriptionEndDate) ? shop.subscriptionEndDate : '', subscriptionDaysRemaining: remaining, subscriptionExpired: expired, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), cardColors: safeColors(shop.cardColors), cardStyle: safeCardStyle(shop.cardStyle), visibleSections: shopSections(shop), chatEnabled: shop.chatEnabled !== false, customCssEnabled: shop.customCssEnabled !== false, customCss: safeShopCss(shop.customCss), createdAt: shop.createdAt }; };
-const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage) });
+const safeShop = (shop) => { const remaining = subscriptionDaysRemaining(shop); const expired = remaining === 0; return { id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active && !expired, subscriptionEndDate: validSubscriptionDate(shop.subscriptionEndDate) ? shop.subscriptionEndDate : '', subscriptionDaysRemaining: remaining, subscriptionExpired: expired, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), visibleSections: shopSections(shop), chatEnabled: shop.chatEnabled !== false, customCssEnabled: shop.customCssEnabled !== false, customCss: safeShopCss(shop.customCss), createdAt: shop.createdAt }; };
+const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, customTheme: customThemeById(shop.theme), bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage) });
 const sanitizeItem = (item) => ({ id: item.id, name: item.name, category: item.category, prepMinutes: item.prepMinutes, image: catalogImages.includes(item.image) ? item.image : productImage(item.name,item.category), active: item.active !== false });
 const safeOrder = (order) => { const { pushSubscriptions, ...visible } = order; return visible; };
 async function manageShopItems(shop, req, res) {
@@ -390,6 +387,17 @@ const googleUrl = (value) => {
 };
 const themes = ['studio', 'court', 'matcha', 'cerulean', 'sandstone', 'slate', 'minty', 'pulse', 'darkly'];
 const themeColorKeys = ['surface', 'text', 'accent', 'accentText', 'card', 'panel', 'panelText', 'sidebar', 'sidebarText', 'border', 'muted'];
+const systemFonts = { system: 'system-ui, "Segoe UI", Tahoma, sans-serif', sans: 'Arial, "Segoe UI", sans-serif', serif: 'Georgia, "Times New Roman", serif', rounded: '"Trebuchet MS", Arial, sans-serif', mono: 'ui-monospace, Consolas, monospace' };
+const maxFontBytes = 256 * 1024;
+const safeCustomFont = (raw) => {
+  if (!raw || typeof raw !== 'object' || !/^font-[a-f0-9]{12}$/.test(String(raw.id || '')) || typeof raw.data !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(raw.data)) return null;
+  const bytes = Buffer.from(raw.data, 'base64');
+  if (!bytes.length || bytes.length > maxFontBytes || bytes.subarray(0, 4).toString('ascii') !== 'wOF2') return null;
+  const name = cleanText(raw.name, 50);
+  return name.length >= 2 ? { id: raw.id, name, format: 'woff2', bytes: bytes.length, data: raw.data } : null;
+};
+const customFontById = (id) => db.settings?.customFonts?.find((font) => font.id === id) || null;
+const publicFontCatalog = () => (db.settings?.customFonts || []).map(({ id, name, format, bytes }) => ({ id, name, format, bytes }));
 const safeCustomTheme = (raw, id = raw?.id) => {
   if (!raw || typeof raw !== 'object' || !/^custom-[a-f0-9]{12}$/.test(String(id || ''))) return null;
   const name = cleanText(raw.name, 40), hint = cleanText(raw.hint || '', 80);
@@ -400,15 +408,18 @@ const safeCustomTheme = (raw, id = raw?.id) => {
     if (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value)) return null;
     colors[key] = value.toLowerCase();
   }
-  return { id, name, hint, colors, updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : Date.now() };
+  const font = typeof raw.font === 'string' && (Object.hasOwn(systemFonts, raw.font) || customFontById(raw.font)) ? raw.font : 'system';
+  return { id, name, hint, colors, font, updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : Date.now() };
 };
 const customThemeById = (id) => db.settings?.customThemes?.find((theme) => theme.id === id) || null;
 const isKnownTheme = (id) => themes.includes(id) || Boolean(customThemeById(id));
-const publicThemeCatalog = () => (db.settings?.customThemes || []).map(({ id, name, hint, colors, updatedAt }) => ({ id, name, hint, colors, updatedAt }));
+const publicThemeCatalog = () => (db.settings?.customThemes || []).map(({ id, name, hint, colors, font, updatedAt }) => ({ id, name, hint, colors, font, updatedAt }));
 function customThemeStyles(theme) {
   const c = theme.colors, selector = `.theme-${theme.id}`, adminSelector = `html[data-admin-theme="${theme.id}"]`;
-  const vars = `--store-bg:${c.surface};--store-ink:${c.text};--store-accent:${c.accent};--store-card:${c.card};--color-paper:${c.surface};--color-paper-2:color-mix(in srgb,${c.surface} 90%,${c.text});--color-paper-3:color-mix(in srgb,${c.surface} 82%,${c.text});--color-ink:${c.text};--color-ink-2:${c.text};--color-muted:${c.muted};--color-rule:${c.border};--color-rule-2:${c.border};--color-accent:${c.accent};--color-accent-ink:${c.accentText};--color-accent-2:${c.accent};--color-focus:${c.accent};--color-cotton:${c.card};--color-ticket-wine:${c.panel};--color-ticket-cream:${c.panelText};--color-ticket-side:${c.surface};--color-ticket-wine-type:${c.text};--customer-card-surface:${c.card};--customer-card-text:${c.text};--customer-card-accent:${c.accent};--customer-card-border:${c.border};--customer-card-panel:${c.panel};--ink:${c.text};--lime:${c.accent};--line:${c.border};--muted:${c.muted};--color-ref-171914:${c.sidebar};--color-ref-161810:${c.sidebar};--color-ref-292b24:color-mix(in srgb,${c.sidebar} 82%,${c.sidebarText});--color-ref-2d3028:color-mix(in srgb,${c.sidebar} 72%,${c.sidebarText});--color-ref-fff:${c.card};--color-ref-aaada4:color-mix(in srgb,${c.sidebarText} 76%,${c.sidebar});--color-ref-96998f:color-mix(in srgb,${c.sidebarText} 62%,${c.sidebar});--color-ref-7f8278:color-mix(in srgb,${c.sidebarText} 50%,${c.sidebar});--color-ref-f6f6f3:${c.surface};--color-ref-fff1ee:color-mix(in srgb,${c.accent} 18%,${c.card});--color-ref-303229:${c.text};--color-ref-33362d:${c.accent};--color-ref-c7f36a:${c.accent};--color-ref-e4e6de:${c.border};--color-ref-edf0e7:${c.surface};--color-ref-eef4e8:${c.surface};--color-ref-f8f9f6:${c.surface};--color-ref-e7eadf:${c.surface};--color-ref-eff0eb:${c.border}`;
-  return `${selector},html${selector}{${vars}}${adminSelector}{${vars};--color-ref-171914:${c.sidebar};--color-ref-fff:${c.card};--color-ref-292b24:color-mix(in srgb,${c.sidebar} 82%,${c.sidebarText});--color-ref-2d3028:color-mix(in srgb,${c.sidebar} 72%,${c.sidebarText})}${adminSelector} .primary{background:${c.accent};color:${c.accentText}}${adminSelector} .primary:hover{background:color-mix(in srgb,${c.accent} 82%,${c.text})}${adminSelector} .rail{color:${c.sidebarText}}${adminSelector} .rail .brand,${adminSelector} .rail .nav-item.active,${adminSelector} .rail .nav-item:hover,${adminSelector} .rail .rail-bottom strong{color:${c.sidebarText}}`;
+  const font = Object.hasOwn(systemFonts, theme.font) ? systemFonts[theme.font] : `"${theme.font}", system-ui, sans-serif`;
+  const uploadedFont = customFontById(theme.font), fontFace = uploadedFont ? `@font-face{font-family:"${uploadedFont.id}";src:url("/api/public/fonts/${uploadedFont.id}") format("woff2");font-display:swap}` : '';
+  const vars = `--store-bg:${c.surface};--store-ink:${c.text};--store-accent:${c.accent};--store-card:${c.card};--color-paper:${c.surface};--color-paper-2:color-mix(in srgb,${c.surface} 90%,${c.text});--color-paper-3:color-mix(in srgb,${c.surface} 82%,${c.text});--color-ink:${c.text};--color-ink-2:${c.text};--color-muted:${c.muted};--color-rule:${c.border};--color-rule-2:${c.border};--color-accent:${c.accent};--color-accent-ink:${c.accentText};--color-accent-2:${c.accent};--color-focus:${c.accent};--color-cotton:${c.card};--color-ticket-wine:${c.panel};--color-ticket-cream:${c.panelText};--color-ticket-side:${c.surface};--color-ticket-wine-type:${c.text};--color-board:${c.panel};--color-board-type:${c.panelText};--customer-card-surface:${c.card};--customer-card-text:${c.text};--customer-card-accent:${c.accent};--customer-card-border:${c.border};--customer-card-panel:${c.panel};--font-body:${font};--font-display:${font};--ink:${c.text};--lime:${c.accent};--line:${c.border};--muted:${c.muted};--color-ref-171914:${c.sidebar};--color-ref-161810:${c.sidebar};--color-ref-292b24:color-mix(in srgb,${c.sidebar} 82%,${c.sidebarText});--color-ref-2d3028:color-mix(in srgb,${c.sidebar} 72%,${c.sidebarText});--color-ref-fff:${c.card};--color-ref-aaada4:color-mix(in srgb,${c.sidebarText} 76%,${c.sidebar});--color-ref-96998f:color-mix(in srgb,${c.sidebarText} 62%,${c.sidebar});--color-ref-7f8278:color-mix(in srgb,${c.sidebarText} 50%,${c.sidebar});--color-ref-f6f6f3:${c.surface};--color-ref-fff1ee:color-mix(in srgb,${c.accent} 18%,${c.card});--color-ref-303229:${c.text};--color-ref-33362d:${c.accent};--color-ref-c7f36a:${c.accent};--color-ref-e4e6de:${c.border};--color-ref-edf0e7:${c.surface};--color-ref-eef4e8:${c.surface};--color-ref-f8f9f6:${c.surface};--color-ref-e7eadf:${c.surface};--color-ref-eff0eb:${c.border}`;
+  return `${fontFace}${selector},html${selector}{${vars}}${adminSelector}{${vars};--color-ref-171914:${c.sidebar};--color-ref-fff:${c.card};--color-ref-292b24:color-mix(in srgb,${c.sidebar} 82%,${c.sidebarText});--color-ref-2d3028:color-mix(in srgb,${c.sidebar} 72%,${c.sidebarText})}${adminSelector} .primary{background:${c.accent};color:${c.accentText}}${adminSelector} .primary:hover{background:color-mix(in srgb,${c.accent} 82%,${c.text})}${adminSelector} .rail{color:${c.sidebarText}}${adminSelector} .rail .brand,${adminSelector} .rail .nav-item.active,${adminSelector} .rail .nav-item:hover,${adminSelector} .rail .rail-bottom strong{color:${c.sidebarText}}`;
 }
 const statuses = ['queued', 'preparing', 'ready', 'completed'];
 const statusLabels = { queued: 'استلمنا طلبك', preparing: 'جاري التحضير', ready: 'جاهز للاستلام', completed: 'تم التسليم' };
@@ -476,6 +487,13 @@ app.get('/api/public/themes.css/:id', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.type('text/css').send(customThemeStyles(theme));
 });
+app.get('/api/public/fonts/:id', (req, res) => {
+  const font = customFontById(req.params.id);
+  if (!font) return res.status(404).type('text/plain').send('Font not found');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.type('font/woff2').send(Buffer.from(font.data, 'base64'));
+});
 app.get('/api/public/manifest.webmanifest', (req, res) => {
   const appName = db.settings.appName || 'نوى';
   const appIcon = publicBranding().appIcon;
@@ -516,7 +534,26 @@ app.delete('/api/admin/themes/:id', requireLogin, requireAdmin, async (req, res)
 });
 app.get('/api/admin/settings', requireLogin, requireAdmin, (req, res) => {
   const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
-  res.json({ settings: { appName: db.settings.appName || 'نوى', adminDisplayName: db.settings.adminDisplayName || '', adminTheme: db.settings.adminTheme || 'studio', customThemes: publicThemeCatalog(), branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '', twoFactorEnabled: Boolean(admin?.totpSecret) } });
+  res.json({ settings: { appName: db.settings.appName || 'نوى', adminDisplayName: db.settings.adminDisplayName || '', adminTheme: db.settings.adminTheme || 'studio', customThemes: publicThemeCatalog(), customFonts: publicFontCatalog(), branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '', twoFactorEnabled: Boolean(admin?.totpSecret) } });
+});
+app.post('/api/admin/fonts', requireLogin, requireAdmin, async (req, res) => {
+  if (db.settings.customFonts.length >= 4) return res.status(400).json({ error: 'يمكن حفظ 4 خطوط مخصصة كحد أقصى؛ احذف خطًا غير مستخدم لإضافة آخر' });
+  const name = cleanText(req.body?.name, 50), dataUrl = req.body?.dataUrl;
+  const encoded = typeof dataUrl === 'string' ? /^data:font\/woff2;base64,([A-Za-z0-9+/]+={0,2})$/.exec(dataUrl)?.[1] : '';
+  const bytes = encoded ? Buffer.from(encoded, 'base64') : Buffer.alloc(0);
+  if (name.length < 2 || !encoded || bytes.length < 16 || bytes.length > maxFontBytes || bytes.subarray(0, 4).toString('ascii') !== 'wOF2') return res.status(400).json({ error: 'ارفع ملف WOFF2 صالحًا بحجم لا يتجاوز 256 كيلوبايت' });
+  if (db.settings.customFonts.some((font) => font.name.toLocaleLowerCase() === name.toLocaleLowerCase())) return res.status(409).json({ error: 'يوجد خط بهذا الاسم بالفعل' });
+  const font = { id: `font-${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`, name, format: 'woff2', bytes: bytes.length, data: encoded };
+  db.settings.customFonts.push(font);
+  await saveDb();
+  res.status(201).json({ customFonts: publicFontCatalog(), customThemes: publicThemeCatalog() });
+});
+app.delete('/api/admin/fonts/:id', requireLogin, requireAdmin, async (req, res) => {
+  if (!customFontById(req.params.id)) return res.status(404).json({ error: 'الخط المخصص غير موجود' });
+  db.settings.customFonts = db.settings.customFonts.filter((font) => font.id !== req.params.id);
+  db.settings.customThemes = db.settings.customThemes.map((theme) => theme.font === req.params.id ? { ...theme, font: 'system', updatedAt: Date.now() } : theme);
+  await saveDb();
+  res.json({ customFonts: publicFontCatalog(), customThemes: publicThemeCatalog() });
 });
 app.post('/api/admin/password', requireLogin, requireAdmin, async (req, res) => {
   const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
@@ -612,7 +649,7 @@ app.patch('/api/admin/settings', requireLogin, requireAdmin, async (req, res) =>
     db.settings.activeStyleId = activeStyleId;
   }
   await saveDb();
-  res.json({ settings: { appName, adminDisplayName: db.settings.adminDisplayName || '', adminTheme: db.settings.adminTheme || 'studio', customThemes: publicThemeCatalog(), branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '' } });
+  res.json({ settings: { appName, adminDisplayName: db.settings.adminDisplayName || '', adminTheme: db.settings.adminTheme || 'studio', customThemes: publicThemeCatalog(), customFonts: publicFontCatalog(), branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '' } });
 });
 app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
   const name = cleanText(req.body?.name, 70);
@@ -628,7 +665,7 @@ app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
   const customCss = req.body?.customCss === undefined ? { store: '', card: '', screen: '' } : sanitizeShopCssSet(req.body.customCss);
   if (!customCss) return res.status(400).json({ error: 'تحقق من CSS: استخدم محددات داخل مساحة المتجر أو بطاقة العميل أو شاشة البانر، دون روابط أو قواعد عامة.' });
   const slug = `${username.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-${crypto.randomBytes(2).toString('hex')}`;
-  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, subscriptionEndDate, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', bannerImage: safeImage(req.body?.bannerImage), iconImage: safeImage(req.body?.iconImage), cardColors: safeColors(req.body?.cardColors), cardStyle: safeCardStyle(req.body?.cardStyle), visibleSections: Array.isArray(req.body?.visibleSections) ? req.body.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections], chatEnabled: req.body?.chatEnabled !== false, customCssEnabled: req.body?.customCssEnabled !== false, customCss, createdAt: new Date().toISOString() };
+  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, subscriptionEndDate, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', bannerImage: safeImage(req.body?.bannerImage), iconImage: safeImage(req.body?.iconImage), visibleSections: Array.isArray(req.body?.visibleSections) ? req.body.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections], chatEnabled: req.body?.chatEnabled !== false, customCssEnabled: req.body?.customCssEnabled !== false, customCss, createdAt: new Date().toISOString() };
   if ((req.body?.bannerImage && !shop.bannerImage) || (req.body?.iconImage && !shop.iconImage)) return res.status(400).json({ error: 'الصورة غير صالحة أو أكبر من الحد المسموح' });
   db.shops.push(shop); await saveDb(); res.status(201).json({ shop: safeShop(shop) });
 });
@@ -660,15 +697,6 @@ app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) =
     const value = req.body[key] === '' ? '' : safeImage(req.body[key]);
     if (req.body[key] !== '' && !value) return res.status(400).json({ error: 'الصورة غير صالحة أو أكبر من الحد المسموح (1.1 ميغابايت)' });
     shop[key] = value;
-  }
-  if (req.body?.cardColors !== undefined) {
-    if (!req.body.cardColors || typeof req.body.cardColors !== 'object' || Array.isArray(req.body.cardColors) || Object.keys(req.body.cardColors).some((key) => !Object.hasOwn(defaultCardColors, key) || !/^#[0-9a-f]{6}$/i.test(req.body.cardColors[key]))) return res.status(400).json({ error: 'تحقق من ألوان البطاقة' });
-    shop.cardColors = safeColors(req.body.cardColors);
-  }
-  if (req.body?.cardStyle !== undefined) {
-    const style=req.body.cardStyle;
-    if(!style||typeof style!=='object'||Array.isArray(style)||!Number.isInteger(style.padding)||style.padding<0||style.padding>48||!Number.isInteger(style.radius)||style.radius<14||style.radius>40||!Number.isInteger(style.scale)||style.scale<90||style.scale>115||!Number.isInteger(style.shadow)||style.shadow<0||style.shadow>30)return res.status(400).json({error:'إعداد شكل البطاقة خارج النطاق المسموح'});
-    shop.cardStyle=safeCardStyle(style);
   }
   if (req.body?.chatEnabled !== undefined) {
     if (typeof req.body.chatEnabled !== 'boolean') return res.status(400).json({ error: 'حالة تواصل المتجر غير صالحة' });
@@ -703,9 +731,15 @@ app.get('/api/admin/shops/:id/items', requireLogin, requireAdmin, (req, res) => 
 function chatForShop(shop, req, res) {
   shop.messages ||= [];
   if (req.method === 'GET') {
-    const role = req.session.user.role, counterpart = role === 'admin' ? 'shop' : 'admin', readKey = role === 'admin' ? 'adminReadAt' : 'storeReadAt';
-    const latestUnread = [...shop.messages].reverse().find((message) => message.sender === counterpart && message.createdAt > (shop[readKey] || ''));
-    if (latestUnread) { shop[readKey] = latestUnread.createdAt; saveDb().catch(() => {}); }
+    const role = req.session.user.role, counterpart = role === 'admin' ? 'shop' : 'admin', readKey = role === 'admin' ? 'adminReadAt' : 'storeReadAt', readAt = new Date().toISOString();
+    let changed = false;
+    if (req.query.read === '1') for (const message of shop.messages) if (message.sender === counterpart && !message.readAt) { message.readAt = readAt; changed = true; }
+    const latestUnread = [...shop.messages].reverse().find((message) => message.sender === counterpart);
+    if (latestUnread && shop[readKey] !== latestUnread.createdAt) { shop[readKey] = latestUnread.createdAt; changed = true; }
+    const before = shop.messages.length;
+    shop.messages = shop.messages.filter((message) => !message.readAt || Date.now() - Date.parse(message.readAt) < 10 * 60 * 1000);
+    if (shop.messages.length !== before) changed = true;
+    if (changed) saveDb().catch(() => {});
     return res.json({ messages: shop.messages.slice(-100) });
   }
   const text = cleanText(req.body?.text, 1000);
@@ -715,7 +749,18 @@ function chatForShop(shop, req, res) {
   shop.messages.push(message); if (shop.messages.length > 500) shop.messages.splice(0, shop.messages.length - 500);
   saveDb().then(() => res.status(201).json({ message })).catch(() => res.status(500).json({ error: 'تعذر حفظ الرسالة' }));
 }
-app.get('/api/admin/chat/inbox', requireLogin, requireAdmin, (req, res) => res.json({ chats: db.shops.map((shop) => ({ id: shop.id, name: shop.name, unread: (shop.messages || []).filter((message) => message.sender === 'shop' && message.createdAt > (shop.adminReadAt || '')).length, latest: shop.messages?.at(-1) || null })) }));
+const chatExpiryTimer = setInterval(() => {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  let changed = false;
+  for (const shop of db.shops) {
+    const messages = shop.messages || [];
+    shop.messages = messages.filter((message) => !message.readAt || !Number.isFinite(Date.parse(message.readAt)) || Date.parse(message.readAt) > cutoff);
+    if (shop.messages.length !== messages.length) changed = true;
+  }
+  if (changed) saveDb().catch(() => {});
+}, 30_000);
+chatExpiryTimer.unref();
+app.get('/api/admin/chat/inbox', requireLogin, requireAdmin, (req, res) => res.json({ chats: db.shops.map((shop) => ({ id: shop.id, name: shop.name, unread: (shop.messages || []).filter((message) => message.sender === 'shop' && !message.readAt).length, latest: shop.messages?.at(-1) || null })) }));
 app.get('/api/admin/shops/:id/chat', requireLogin, requireAdmin, (req, res) => { const shop=db.shops.find((entry)=>entry.id===req.params.id); return shop ? chatForShop(shop,req,res) : res.status(404).json({error:'المتجر غير موجود'}); });
 app.post('/api/admin/shops/:id/chat', requireLogin, requireAdmin, (req, res) => { const shop=db.shops.find((entry)=>entry.id===req.params.id); return shop ? chatForShop(shop,req,res) : res.status(404).json({error:'المتجر غير موجود'}); });
 app.get('/api/shop/chat', requireLogin, requireShop, (req,res)=>req.shop.chatEnabled===false?res.status(403).json({error:'التواصل مع الأدمن غير متاح لهذا المتجر'}):chatForShop(req.shop,req,res));
@@ -734,7 +779,7 @@ app.delete('/api/admin/shops/:id/items/:itemId', requireLogin, requireAdmin, (re
 });
 
 app.get('/api/shop/orders', requireLogin, requireShop, (req, res) => res.json({ orders: db.orders.filter((o) => o.shopId === req.shop.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(safeOrder) }));
-app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, customThemes: publicThemeCatalog(), orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), cardColors: safeColors(req.shop.cardColors), cardStyle: safeCardStyle(req.shop.cardStyle), visibleSections: shopSections(req.shop), chatEnabled: req.shop.chatEnabled !== false, subscriptionEndDate: validSubscriptionDate(req.shop.subscriptionEndDate) ? req.shop.subscriptionEndDate : '', subscriptionDaysRemaining: subscriptionDaysRemaining(req.shop) } }));
+app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, customThemes: publicThemeCatalog(), customFonts: publicFontCatalog(), orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), visibleSections: shopSections(req.shop), chatEnabled: req.shop.chatEnabled !== false, subscriptionEndDate: validSubscriptionDate(req.shop.subscriptionEndDate) ? req.shop.subscriptionEndDate : '', subscriptionDaysRemaining: subscriptionDaysRemaining(req.shop) } }));
 async function createOrderForShop(shop, body, res) {
   const customerName = cleanText(body?.customerName, 60);
   let item = '', items = [], prepMinutes = 0;
@@ -826,8 +871,8 @@ app.get('/api/public/orders/:id', async (req, res) => {
   if (!order) return res.status(404).json({ error: 'الطلب غير موجود' });
   if (!order.scanned) return res.status(403).json({ error: 'امسح رمز الطلب المعروض على شاشة المتجر لعرض بطاقة الحالة' });
   const shop = db.shops.find((s) => s.id === order.shopId);
-  const publicShop={ name: shop?.name || '', bannerText: shop?.bannerText || '', reviewUrl: order.status === 'completed' ? shop?.reviewUrl || '' : '', theme: shop?.theme || 'studio' };
-  if(req.query.design==='1')Object.assign(publicShop,{slug:shop?.slug||'',bannerImage:safeImage(shop?.bannerImage),iconImage:safeImage(shop?.iconImage),cardColors:safeColors(shop?.cardColors),cardStyle:safeCardStyle(shop?.cardStyle)});
+  const publicShop={ name: shop?.name || '', bannerText: shop?.bannerText || '', reviewUrl: order.status === 'completed' ? shop?.reviewUrl || '' : '', theme: shop?.theme || 'studio', customTheme: customThemeById(shop?.theme) };
+  if(req.query.design==='1')Object.assign(publicShop,{slug:shop?.slug||'',bannerImage:safeImage(shop?.bannerImage),iconImage:safeImage(shop?.iconImage)});
   res.json({ order: { id: order.id, number: order.number, customerName: order.customerName || '', item: order.item, items: order.items || [], prepMinutes: order.prepMinutes || 0, status: order.status, statusLabel: statusLabels[order.status], updatedAt: order.updatedAt }, shop: publicShop });
 });
 app.get('/scan/:id', async (req, res) => {
