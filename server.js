@@ -6,6 +6,7 @@ const webPush = require('web-push');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const ThemeSystem = require('./public/theme-system.js');
 
 const app = express();
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
@@ -164,17 +165,47 @@ function normalizeAndSeedDb() {
   const normalizedFonts = rawFonts.map((font) => safeCustomFont(font)).filter(Boolean).slice(0, 4);
   if (!Array.isArray(db.settings.customFonts) || JSON.stringify(normalizedFonts) !== JSON.stringify(rawFonts)) { db.settings.customFonts = normalizedFonts; changed = true; }
   const rawCustomThemes = Array.isArray(db.settings.customThemes) ? db.settings.customThemes : [];
-  const normalizedThemes = rawCustomThemes.map((theme) => safeCustomTheme(theme)).filter(Boolean).slice(0, 30);
-  if (!Array.isArray(db.settings.customThemes) || JSON.stringify(normalizedThemes) !== JSON.stringify(rawCustomThemes)) { db.settings.customThemes = normalizedThemes; changed = true; }
+  if (rawCustomThemes.length || !Array.isArray(db.settings.customThemes)) { db.settings.customThemes = []; changed = true; }
+  if (!db.settings.themeSystem || db.settings.themeSystem.version !== 1) {
+    db.settings.themeSystem = makeThemeSystem();
+    db.settings.customThemes = [];
+    db.settings.stylePresets = [];
+    db.settings.activeStyleId = '';
+    changed = true;
+  } else {
+    const system = db.settings.themeSystem;
+    const sanitizeRecord = (record, fallback) => {
+      const published = safeThemeConfig(record?.published) || ThemeSystem.clone(fallback);
+      const draft = safeThemeConfig(record?.draft) || ThemeSystem.clone(published);
+      const versions = Array.isArray(record?.versions) ? record.versions.slice(-20).map((item) => ({ config: safeThemeConfig(item?.config), createdAt: Number(item?.createdAt) || Date.now() })).filter((item) => item.config) : [];
+      return { published, draft, versions };
+    };
+    const fallbackPlatform = { ...ThemeSystem.clone(ThemeSystem.DEFAULT_THEME), name: 'Stap Platform Theme' };
+    const themes = (Array.isArray(system.themes) ? system.themes : []).slice(0, 40).map((theme) => ({
+      id: validThemeId(theme?.id) && theme.id !== 'stap-default' ? theme.id : `theme-${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`,
+      name: cleanText(theme?.name, 60), config: safeThemeConfig(theme?.config), draft: safeThemeConfig(theme?.draft) || safeThemeConfig(theme?.config), createdAt: Number(theme?.createdAt) || Date.now(), updatedAt: Number(theme?.updatedAt) || Date.now(),
+      versions: Array.isArray(theme?.versions) ? theme.versions.slice(-20).map((item) => ({ config: safeThemeConfig(item?.config), createdAt: Number(item?.createdAt) || Date.now() })).filter((item) => item.config) : []
+    })).filter((theme) => theme.name.length >= 2 && theme.config);
+    db.settings.themeSystem = { version: 1, storeDefault: sanitizeRecord(system.storeDefault, ThemeSystem.DEFAULT_THEME), platform: sanitizeRecord(system.platform, fallbackPlatform), themes };
+    if (db.settings.customThemes.length) { db.settings.customThemes = []; changed = true; }
+    if ((db.settings.stylePresets || []).length || db.settings.activeStyleId) { db.settings.stylePresets = []; db.settings.activeStyleId = ''; changed = true; }
+    if (JSON.stringify(db.settings.themeSystem) !== JSON.stringify(system)) changed = true;
+  }
   if (typeof db.settings.activeStyleId !== 'string') { db.settings.activeStyleId = ''; changed = true; }
   if (typeof db.settings.adminDisplayName !== 'string') { db.settings.adminDisplayName = ''; changed = true; }
-  if (typeof db.settings.adminTheme !== 'string' || !isKnownTheme(db.settings.adminTheme)) { db.settings.adminTheme = 'studio'; changed = true; }
+  if (db.settings.adminTheme !== 'stap-default') { db.settings.adminTheme = 'stap-default'; changed = true; }
   if (!db.settings.textOverrides || typeof db.settings.textOverrides !== 'object' || Array.isArray(db.settings.textOverrides)) { db.settings.textOverrides = {}; changed = true; }
   for (const shop of db.shops) {
     if (!Array.isArray(shop.visibleSections)) { shop.visibleSections = [...allShopSections]; changed = true; }
     if (typeof shop.chatEnabled !== 'boolean') { shop.chatEnabled = true; changed = true; }
-    if (typeof shop.customCssEnabled !== 'boolean') { shop.customCssEnabled = true; changed = true; }
-    if (!shop.customCss || typeof shop.customCss !== 'object') { shop.customCss = { store: '', card: '', screen: '' }; changed = true; }
+    if (Object.hasOwn(shop, 'customCssEnabled')) { delete shop.customCssEnabled; changed = true; }
+    if (Object.hasOwn(shop, 'customCss')) { delete shop.customCss; changed = true; }
+    const oldTheme = shop.theme;
+    const migratedThemeId = validThemeId(oldTheme) && themeById(oldTheme) ? oldTheme : 'stap-default';
+    const normalizedThemeState = sanitizeShopThemeState(shop.themeSystem, migratedThemeId);
+    if (JSON.stringify(normalizedThemeState) !== JSON.stringify(shop.themeSystem || null)) changed = true;
+    shop.themeSystem = normalizedThemeState;
+    if (shop.theme !== normalizedThemeState.published.themeId) { shop.theme = normalizedThemeState.published.themeId; changed = true; }
     if (typeof shop.bannerImage !== 'string') { shop.bannerImage = ''; changed = true; }
     if (typeof shop.iconImage !== 'string') { shop.iconImage = ''; changed = true; }
     if (!['catalog', 'custom'].includes(shop.orderMode)) { shop.orderMode = 'catalog'; changed = true; }
@@ -268,59 +299,6 @@ app.use('/api', async (req, res, next) => {
   next();
 });
 const allShopSections = ['home', 'menu', 'design'];
-const shopCssScopes = { store: ['.shell', '.modal-backdrop', '.direct-chat', '.toast'], card: ['body.customer-page', '.customer-ticket'], screen: ['body.screen-page', '.signage'] };
-const validateShopCssRules = (source, scope) => {
-  let index = 0;
-  while (index < source.length) {
-    while (/\s/.test(source[index] || '') || source.startsWith(';', index)) index++;
-    if (index >= source.length) return true;
-    const open = source.indexOf('{', index);
-    if (open < 0) return false;
-    const selectorText = source.slice(index, open).trim();
-    if (!selectorText) return false;
-    let depth = 1, close = open + 1;
-    for (; close < source.length && depth; close++) {
-      if (source[close] === '{') depth++;
-      if (source[close] === '}') depth--;
-    }
-    if (depth) return false;
-    const declarations = source.slice(open + 1, close - 1);
-    if (selectorText.startsWith('@media ')) {
-      if (!/^@media\s*\(\s*(?:min|max)-(?:width|height)\s*:\s*\d+(?:px|em|rem|vw|vh)\s*\)$/.test(selectorText) || !validateShopCssRules(declarations, scope)) return false;
-    } else {
-      const selectors = selectorText.split(',').map((selector) => selector.trim());
-      if (selectorText.startsWith('@') || selectors.some((selector) => !scope.some((root) => selector.startsWith(root) && !/[\w-]/.test(selector[root.length] || '')) ) || declarations.includes('{')) return false;
-      for (const declaration of declarations.split(';').map((entry) => entry.trim()).filter(Boolean)) {
-        const separator = declaration.indexOf(':');
-        if (separator < 1 || !/^(?:--[a-z0-9-]+|[a-z-]+)$/i.test(declaration.slice(0, separator).trim())) return false;
-        const value = declaration.slice(separator + 1).trim();
-        if (!value || /url\s*\(|expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding|[{}]/i.test(value)) return false;
-      }
-    }
-    index = close;
-  }
-  return true;
-};
-const sanitizeShopCss = (value, surface) => {
-  if (typeof value !== 'string' || value.length > 12000) return null;
-  const css = value.replace(/\/\*[\s\S]*?\*\//g, '').trim();
-  if (!css) return '';
-  if (/url\s*\(|expression\s*\(|javascript\s*:|behavior\s*:|-moz-binding|<\/style|\\/i.test(css)) return null;
-  const scopes = shopCssScopes[surface];
-  if (!scopes || !validateShopCssRules(css, scopes)) return null;
-  return css;
-};
-const safeShopCss = (value) => Object.fromEntries(Object.keys(shopCssScopes).map((surface) => [surface, sanitizeShopCss(value?.[surface] || '', surface) || '']));
-const sanitizeShopCssSet = (value) => {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some((key) => !Object.hasOwn(shopCssScopes, key))) return null;
-  const result = {};
-  for (const surface of Object.keys(shopCssScopes)) {
-    const css = sanitizeShopCss(value[surface] ?? '', surface);
-    if (css === null) return null;
-    result[surface] = css;
-  }
-  return result;
-};
 const safeImage = (value) => typeof value === 'string' && value.length <= 1_500_000 && /^data:image\/(?:webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : '';
 const shopSections = (shop) => Array.isArray(shop.visibleSections) ? shop.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections];
 const validSubscriptionDate = (value) => {
@@ -339,8 +317,8 @@ const subscriptionDaysRemaining = (shop, now = Date.now()) => {
   return expiresAt === null ? null : Math.max(0, Math.ceil((expiresAt - now) / 86_400_000));
 };
 const subscriptionExpired = (shop, now = Date.now()) => subscriptionDaysRemaining(shop, now) === 0;
-const safeShop = (shop) => { const remaining = subscriptionDaysRemaining(shop); const expired = remaining === 0; return { id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active && !expired, subscriptionEndDate: validSubscriptionDate(shop.subscriptionEndDate) ? shop.subscriptionEndDate : '', subscriptionDaysRemaining: remaining, subscriptionExpired: expired, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), visibleSections: shopSections(shop), chatEnabled: shop.chatEnabled !== false, customCssEnabled: shop.customCssEnabled !== false, customCss: safeShopCss(shop.customCss), createdAt: shop.createdAt }; };
-const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, customTheme: customThemeById(shop.theme), bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage) });
+const safeShop = (shop) => { const remaining = subscriptionDaysRemaining(shop); const expired = remaining === 0; return { id: shop.id, slug: shop.slug, name: shop.name, username: shop.username, active: shop.active && !expired, subscriptionEndDate: validSubscriptionDate(shop.subscriptionEndDate) ? shop.subscriptionEndDate : '', subscriptionDaysRemaining: remaining, subscriptionExpired: expired, reviewUrl: shop.reviewUrl, theme: shop.theme, orderMode: shop.orderMode || 'catalog', bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage), visibleSections: shopSections(shop), chatEnabled: shop.chatEnabled !== false, createdAt: shop.createdAt }; };
+const publicScreenShop = (shop) => ({ slug: shop.slug, name: shop.name, theme: shop.theme, themeData: resolveThemeData(shop, 'signage'), bannerText: shop.bannerText, bannerImage: safeImage(shop.bannerImage), iconImage: safeImage(shop.iconImage) });
 const sanitizeItem = (item) => ({ id: item.id, name: item.name, category: item.category, prepMinutes: item.prepMinutes, image: catalogImages.includes(item.image) ? item.image : productImage(item.name,item.category), active: item.active !== false });
 const safeOrder = (order) => { const { pushSubscriptions, ...visible } = order; return visible; };
 async function manageShopItems(shop, req, res) {
@@ -391,9 +369,6 @@ const googleUrl = (value) => {
     return url.protocol === 'https:' && (host === 'google.com' || host.endsWith('.google.com') || host === 'g.page' || host === 'goo.gl' || host.endsWith('.goo.gl')) ? url.toString() : null;
   } catch { return null; }
 };
-const themes = ['studio', 'court', 'matcha', 'cerulean', 'sandstone', 'slate', 'minty', 'pulse', 'darkly'];
-const themeColorKeys = ['surface', 'text', 'accent', 'accentText', 'card', 'panel', 'panelText', 'sidebar', 'sidebarText', 'border', 'muted'];
-const systemFonts = { system: 'system-ui, "Segoe UI", Tahoma, sans-serif', sans: 'Arial, "Segoe UI", sans-serif', serif: 'Georgia, "Times New Roman", serif', rounded: '"Trebuchet MS", Arial, sans-serif', mono: 'ui-monospace, Consolas, monospace' };
 const maxFontBytes = 256 * 1024;
 const safeCustomFont = (raw) => {
   if (!raw || typeof raw !== 'object' || !/^font-[a-f0-9]{12}$/.test(String(raw.id || '')) || typeof raw.data !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(raw.data)) return null;
@@ -404,29 +379,81 @@ const safeCustomFont = (raw) => {
 };
 const customFontById = (id) => db.settings?.customFonts?.find((font) => font.id === id) || null;
 const publicFontCatalog = () => (db.settings?.customFonts || []).map(({ id, name, format, bytes }) => ({ id, name, format, bytes }));
-const safeCustomTheme = (raw, id = raw?.id) => {
-  if (!raw || typeof raw !== 'object' || !/^custom-[a-f0-9]{12}$/.test(String(id || ''))) return null;
-  const name = cleanText(raw.name, 40), hint = cleanText(raw.hint || '', 80);
-  if (name.length < 2 || !raw.colors || typeof raw.colors !== 'object' || Array.isArray(raw.colors)) return null;
-  const colors = {};
-  for (const key of themeColorKeys) {
-    const value = raw.colors[key];
-    if (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value)) return null;
-    colors[key] = value.toLowerCase();
-  }
-  const font = typeof raw.font === 'string' && (Object.hasOwn(systemFonts, raw.font) || customFontById(raw.font)) ? raw.font : 'system';
-  return { id, name, hint, colors, font, updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : Date.now() };
-};
-const customThemeById = (id) => db.settings?.customThemes?.find((theme) => theme.id === id) || null;
-const isKnownTheme = (id) => themes.includes(id) || Boolean(customThemeById(id));
-const publicThemeCatalog = () => (db.settings?.customThemes || []).map(({ id, name, hint, colors, font, updatedAt }) => ({ id, name, hint, colors, font, updatedAt }));
-function customThemeStyles(theme) {
-  const c = theme.colors, selector = `.theme-${theme.id}`, adminSelector = `html[data-admin-theme="${theme.id}"]`;
-  const font = Object.hasOwn(systemFonts, theme.font) ? systemFonts[theme.font] : `"${theme.font}", system-ui, sans-serif`;
-  const uploadedFont = customFontById(theme.font), fontFace = uploadedFont ? `@font-face{font-family:"${uploadedFont.id}";src:url("/api/public/fonts/${uploadedFont.id}") format("woff2");font-display:swap}` : '';
-  const vars = `--store-bg:${c.surface};--store-ink:${c.text};--store-accent:${c.accent};--store-card:${c.card};--color-paper:${c.surface};--color-paper-2:color-mix(in srgb,${c.surface} 90%,${c.text});--color-paper-3:color-mix(in srgb,${c.surface} 82%,${c.text});--color-ink:${c.text};--color-ink-2:${c.text};--color-muted:${c.muted};--color-rule:${c.border};--color-rule-2:${c.border};--color-accent:${c.accent};--color-accent-ink:${c.accentText};--color-accent-2:${c.accent};--color-focus:${c.accent};--color-cotton:${c.card};--color-ticket-wine:${c.panel};--color-ticket-cream:${c.panelText};--color-ticket-side:${c.surface};--color-ticket-wine-type:${c.text};--color-board:${c.panel};--color-board-type:${c.panelText};--customer-card-surface:${c.card};--customer-card-text:${c.text};--customer-card-accent:${c.accent};--customer-card-border:${c.border};--customer-card-panel:${c.panel};--font-body:${font};--font-display:${font};--ink:${c.text};--lime:${c.accent};--line:${c.border};--muted:${c.muted};--color-ref-171914:${c.sidebar};--color-ref-161810:${c.sidebar};--color-ref-292b24:color-mix(in srgb,${c.sidebar} 82%,${c.sidebarText});--color-ref-2d3028:color-mix(in srgb,${c.sidebar} 72%,${c.sidebarText});--color-ref-fff:${c.card};--color-ref-aaada4:color-mix(in srgb,${c.sidebarText} 76%,${c.sidebar});--color-ref-96998f:color-mix(in srgb,${c.sidebarText} 62%,${c.sidebar});--color-ref-7f8278:color-mix(in srgb,${c.sidebarText} 50%,${c.sidebar});--color-ref-f6f6f3:${c.surface};--color-ref-fff1ee:color-mix(in srgb,${c.accent} 18%,${c.card});--color-ref-303229:${c.text};--color-ref-33362d:${c.accent};--color-ref-c7f36a:${c.accent};--color-ref-e4e6de:${c.border};--color-ref-edf0e7:${c.surface};--color-ref-eef4e8:${c.surface};--color-ref-f8f9f6:${c.surface};--color-ref-e7eadf:${c.surface};--color-ref-eff0eb:${c.border}`;
-  return `${fontFace}${selector},html${selector}{${vars}}${adminSelector}{${vars};--color-ref-171914:${c.sidebar};--color-ref-fff:${c.card};--color-ref-292b24:color-mix(in srgb,${c.sidebar} 82%,${c.sidebarText});--color-ref-2d3028:color-mix(in srgb,${c.sidebar} 72%,${c.sidebarText})}${adminSelector} .primary{background:${c.accent};color:${c.accentText}}${adminSelector} .primary:hover{background:color-mix(in srgb,${c.accent} 82%,${c.text})}${adminSelector} .rail{color:${c.sidebarText}}${adminSelector} .rail .brand,${adminSelector} .rail .nav-item.active,${adminSelector} .rail .nav-item:hover,${adminSelector} .rail .rail-bottom strong{color:${c.sidebarText}}`;
+const makeThemeRecord = (config) => ({ draft: ThemeSystem.clone(config), published: ThemeSystem.clone(config), versions: [] });
+const makeThemeSystem = (themes = []) => ({
+  version: 1,
+  storeDefault: makeThemeRecord(ThemeSystem.DEFAULT_THEME),
+  platform: makeThemeRecord({ ...ThemeSystem.clone(ThemeSystem.DEFAULT_THEME), name: 'Stap Platform Theme' }),
+  themes
+});
+const validThemeId = (id) => id === 'stap-default' || /^custom-[a-f0-9]{12}$/.test(String(id || '')) || /^theme-[a-f0-9]{12}$/.test(String(id || ''));
+const themeById = (id) => id === 'stap-default' ? { id, name: 'stap Default Theme', config: db.settings?.themeSystem?.storeDefault?.published || ThemeSystem.DEFAULT_THEME } : db.settings?.themeSystem?.themes?.find((theme) => theme.id === id) || null;
+const publicThemeCatalog = () => [{ id: 'stap-default', name: 'stap Default Theme', protected: true }, ...(db.settings?.themeSystem?.themes || []).map(({ id, name, updatedAt }) => ({ id, name, updatedAt }))];
+function safeThemeConfig(raw, partial = false) {
+  return ThemeSystem.sanitizeConfig(raw, {
+    cleanText,
+    safeImage,
+    fontExists: (id) => Boolean(customFontById(id))
+  }, partial);
 }
+function sanitizeThemeOverride(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const shaped = { ...raw, schemaVersion: 1 };
+  const cleaned = safeThemeConfig(shaped, true);
+  if (!cleaned) return null;
+  delete cleaned.schemaVersion;
+  delete cleaned.name;
+  return cleaned;
+}
+function sanitizeShopThemeState(raw, previousTheme = 'stap-default') {
+  const value = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const cleanRevision = (revision) => {
+    if (!revision || typeof revision !== 'object' || !validThemeId(revision.themeId)) return null;
+    const overrides = sanitizeThemeOverride(revision.overrides || {});
+    return overrides ? { themeId: revision.themeId, overrides } : null;
+  };
+  const published = cleanRevision(value.published) || { themeId: validThemeId(previousTheme) ? previousTheme : 'stap-default', overrides: {} };
+  const draft = value.draft ? cleanRevision(value.draft) : null;
+  const versions = Array.isArray(value.versions) ? value.versions.slice(-20).map((item) => {
+    const revision = cleanRevision(item?.revision);
+    return revision && Number.isFinite(item?.createdAt) ? { revision, createdAt: item.createdAt } : null;
+  }).filter(Boolean) : [];
+  return { published, draft, versions };
+}
+function resolveThemeData(shop, target = 'store') {
+  const themeState = shop?.themeSystem || sanitizeShopThemeState(null, shop?.theme);
+  const revision = themeState.published || { themeId: 'stap-default', overrides: {} };
+  return {
+    defaultTheme: db.settings.themeSystem.storeDefault.published,
+    assignedTheme: themeById(revision.themeId)?.config || db.settings.themeSystem.storeDefault.published,
+    overrides: revision.overrides || {},
+    fonts: publicFontCatalog(),
+    target
+  };
+}
+function adminThemeTarget(target, shopId) {
+  const system = db.settings.themeSystem;
+  if (target === 'platform' || target === 'default') {
+    const record = target === 'platform' ? system.platform : system.storeDefault;
+    return { kind: target, name: target === 'platform' ? 'هوية المنصة' : 'stap Default Theme', record, config: ThemeSystem.clone(record.draft || record.published), versions: record.versions || [] };
+  }
+  if (target.startsWith('theme:')) {
+    const record = system.themes.find((entry) => entry.id === target.slice(6));
+    return record ? { kind: 'theme', id: record.id, name: record.name, record, config: ThemeSystem.clone(record.draft || record.config), versions: record.versions || [] } : null;
+  }
+  if (target === 'shop' && shopId) {
+    const shop = db.shops.find((entry) => entry.id === shopId);
+    if (!shop) return null;
+    const published = shop.themeSystem?.published || { themeId: 'stap-default', overrides: {} };
+    const draft = shop.themeSystem?.draft;
+    const source = draft || published;
+    const assigned = themeById(source.themeId)?.config || system.storeDefault.published;
+    const config = ThemeSystem.merge(system.storeDefault.published, assigned, source.overrides || {});
+    return { kind: 'shop', id: shop.id, name: shop.name, shop, config, versions: shop.themeSystem?.versions || [] };
+  }
+  return null;
+}
+const isKnownTheme = (id) => validThemeId(id) && Boolean(themeById(id));
 const statuses = ['queued', 'preparing', 'ready', 'completed'];
 const statusLabels = { queued: 'استلمنا طلبك', preparing: 'جاري التحضير', ready: 'جاهز للاستلام', completed: 'تم التسليم' };
 
@@ -474,25 +501,12 @@ const publicBranding = () => {
 };
 app.get('/api/public/settings', (req, res) => res.json({ settings: { appName: db.settings.appName || 'نوى', branding: publicBranding(), textOverrides: db.settings.textOverrides || {} } }));
 app.get('/api/public/custom-style.css', (req, res) => {
-  const preset = (db.settings.stylePresets || []).find((style) => style.id === db.settings.activeStyleId);
-  res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.type('text/css').send(preset?.css || '/* No custom style is active. */');
+  return res.status(410).type('text/plain').send('Legacy custom CSS is disabled');
 });
 app.get('/api/public/shop-style.css/:slug/:surface', (req, res) => {
-  const shop = db.shops.find((entry) => entry.slug === req.params.slug);
-  const css = shop && Object.hasOwn(shopCssScopes, req.params.surface) ? (shop.customCssEnabled === false ? '' : sanitizeShopCss(shop.customCss?.[req.params.surface] || '', req.params.surface)) : null;
-  if (!shop || css === null) return res.status(404).type('text/plain').send('Not found');
-  res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.type('text/css').send(css);
+  return res.status(410).type('text/plain').send('Legacy custom CSS is disabled');
 });
-app.get('/api/public/themes.css/:id', (req, res) => {
-  const theme = customThemeById(req.params.id);
-  if (!theme) return res.status(404).type('text/plain').send('Theme not found');
-  res.setHeader('Cache-Control', 'no-store');
-  res.type('text/css').send(customThemeStyles(theme));
-});
+app.get('/api/public/themes.css/:id', (req, res) => res.status(410).type('text/plain').send('Legacy theme CSS is disabled'));
 app.get('/api/public/fonts/:id', (req, res) => {
   const font = customFontById(req.params.id);
   if (!font) return res.status(404).type('text/plain').send('Font not found');
@@ -503,44 +517,93 @@ app.get('/api/public/fonts/:id', (req, res) => {
 app.get('/api/public/manifest.webmanifest', (req, res) => {
   const appName = db.settings.appName || 'نوى';
   const appIcon = publicBranding().appIcon;
-  const icon = appIcon ? { src: appIcon, sizes: '512x512', type: appIcon.slice(5, appIcon.indexOf(';')), purpose: 'any' } : { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' };
+  const icon = appIcon ? { src: appIcon, sizes: '512x512', type: appIcon.slice(5, appIcon.indexOf(';')), purpose: 'any' } : { src: '/assets/stap/app-icon-light.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' };
   res.setHeader('Cache-Control', 'no-store');
-  res.type('application/manifest+json').json({ id: '/', name: appName, short_name: appName.slice(0, 12), lang: 'ar', dir: 'rtl', start_url: '/', scope: '/', display: 'standalone', background_color: '#f6f6f3', theme_color: '#171914', icons: [icon] });
+  res.type('application/manifest+json').json({ id: '/', name: appName, short_name: appName.slice(0, 12), lang: 'ar', dir: 'rtl', start_url: '/', scope: '/', display: 'standalone', background_color: '#f1f1e9', theme_color: '#252821', icons: [icon] });
 });
 
 app.get('/api/admin/shops', requireLogin, requireAdmin, (req, res) => res.json({ shops: db.shops.map(safeShop) }));
-app.post('/api/admin/themes', requireLogin, requireAdmin, async (req, res) => {
-  if (db.settings.customThemes.length >= 30) return res.status(400).json({ error: 'وصلت إلى الحد الأقصى وهو 30 ثيمًا مخصصًا' });
-  const id = `custom-${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`;
-  const theme = safeCustomTheme(req.body, id);
-  if (!theme) return res.status(400).json({ error: 'تحقق من الاسم والألوان؛ يجب أن تكون الألوان بصيغة HEX مثل #203040' });
-  if (db.settings.customThemes.some((item) => item.name.toLocaleLowerCase() === theme.name.toLocaleLowerCase())) return res.status(409).json({ error: 'يوجد ثيم بهذا الاسم بالفعل' });
-  db.settings.customThemes.push(theme);
-  await saveDb();
-  res.status(201).json({ theme, customThemes: publicThemeCatalog() });
+app.get('/api/admin/theme-builder', requireLogin, requireAdmin, (req, res) => {
+  const target = String(req.query.target || 'default');
+  const data = adminThemeTarget(target, String(req.query.shopId || ''));
+  if (!data) return res.status(404).json({ error: 'وجهة الثيم غير موجودة' });
+  let published = data.kind === 'shop' ? data.config : data.kind === 'theme' ? data.record.config : data.record.published;
+  if (data.kind === 'shop') { const revision=data.shop.themeSystem?.published||{themeId:'stap-default',overrides:{}}; published=ThemeSystem.merge(db.settings.themeSystem.storeDefault.published,themeById(revision.themeId)?.config||{},revision.overrides||{}); }
+  res.json({ target: { kind: data.kind, id: data.id || '', name: data.name }, config: data.config, published, versions: data.versions, themes: publicThemeCatalog(), shops: db.shops.map(({ id, name }) => ({ id, name })) , fonts: publicFontCatalog() });
 });
-app.patch('/api/admin/themes/:id', requireLogin, requireAdmin, async (req, res) => {
-  const index = db.settings.customThemes.findIndex((item) => item.id === req.params.id);
-  if (index < 0) return res.status(404).json({ error: 'الثيم المخصص غير موجود' });
-  const theme = safeCustomTheme(req.body, req.params.id);
-  if (!theme) return res.status(400).json({ error: 'تحقق من الاسم والألوان؛ يجب أن تكون الألوان بصيغة HEX مثل #203040' });
-  if (db.settings.customThemes.some((item, itemIndex) => itemIndex !== index && item.name.toLocaleLowerCase() === theme.name.toLocaleLowerCase())) return res.status(409).json({ error: 'يوجد ثيم بهذا الاسم بالفعل' });
-  theme.updatedAt = Date.now();
-  db.settings.customThemes[index] = theme;
+app.patch('/api/admin/theme-builder/draft', requireLogin, requireAdmin, async (req, res) => {
+  const target = String(req.body?.target || 'default'), data = adminThemeTarget(target, String(req.body?.shopId || ''));
+  const config = safeThemeConfig(req.body?.config);
+  if (!data || !config) return res.status(400).json({ error: 'إعدادات الثيم غير صالحة أو الوجهة غير موجودة' });
+  if (data.kind === 'shop') {
+    const state = data.shop.themeSystem || sanitizeShopThemeState(null, data.shop.theme);
+    const overrides = sanitizeThemeOverride(config);
+    if (!overrides) return res.status(400).json({ error: 'تعذر حفظ تخصيص المتجر' });
+    state.draft = { themeId: state.draft?.themeId || state.published.themeId, overrides };
+    data.shop.themeSystem = state;
+  } else if (data.kind === 'theme') data.record.draft = config;
+  else { if (data.kind === 'default') config.name = 'stap Default Theme'; data.record.draft = config; }
   await saveDb();
-  res.json({ theme, customThemes: publicThemeCatalog() });
+  res.json({ ok: true, config });
 });
-app.delete('/api/admin/themes/:id', requireLogin, requireAdmin, async (req, res) => {
-  const theme = customThemeById(req.params.id);
-  if (!theme) return res.status(404).json({ error: 'الثيم المخصص غير موجود' });
-  if (db.settings.adminTheme === theme.id || db.shops.some((shop) => shop.theme === theme.id)) return res.status(409).json({ error: 'هذا الثيم مستخدم؛ غيّر الثيم في لوحة الأدمن والمتاجر أولاً' });
-  db.settings.customThemes = db.settings.customThemes.filter((item) => item.id !== theme.id);
-  await saveDb();
-  res.json({ ok: true, customThemes: publicThemeCatalog() });
+app.post('/api/admin/theme-builder/publish', requireLogin, requireAdmin, async (req, res) => {
+  const target = String(req.body?.target || 'default'), data = adminThemeTarget(target, String(req.body?.shopId || ''));
+  if (!data) return res.status(404).json({ error: 'وجهة الثيم غير موجودة' });
+  const time = Date.now();
+  if (data.kind === 'shop') {
+    const state = data.shop.themeSystem || sanitizeShopThemeState(null, data.shop.theme);
+    const draft = state.draft || { themeId: 'stap-default', overrides: {} };
+    state.versions = [...(state.versions || []), { revision: state.published, createdAt: time }].slice(-20);
+    state.published = draft; state.draft = null; data.shop.themeSystem = state; data.shop.theme = draft.themeId;
+  } else {
+    data.record.versions = [...(data.record.versions || []), { config: data.record.published || data.record.config, createdAt: time }].slice(-20);
+    if (data.kind === 'theme') { data.record.config = data.record.draft || data.record.config; data.record.name = cleanText(data.record.config.name, 60) || data.record.name; }
+    else data.record.published = data.record.draft || data.record.published;
+    data.record.draft = ThemeSystem.clone(data.record.config || data.record.published);
+  }
+  await saveDb(); res.json({ ok: true });
 });
+app.post('/api/admin/theme-builder/themes', requireLogin, requireAdmin, async (req, res) => {
+  const name = cleanText(req.body?.name, 60), config = safeThemeConfig(req.body?.config);
+  if (name.length < 2 || !config || db.settings.themeSystem.themes.length >= 40) return res.status(400).json({ error: 'تحقق من اسم الثيم وإعداداته أو عدد الثيمات (الحد 40)' });
+  const id = `theme-${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`;
+  config.name = name;
+  const record = { id, name, config, draft: ThemeSystem.clone(config), createdAt: Date.now(), updatedAt: Date.now(), versions: [] };
+  db.settings.themeSystem.themes.push(record); await saveDb();
+  res.status(201).json({ theme: { id, name }, themes: publicThemeCatalog() });
+});
+app.post('/api/admin/theme-builder/assign', requireLogin, requireAdmin, async (req, res) => {
+  const shop = db.shops.find((entry) => entry.id === req.body?.shopId), themeId = String(req.body?.themeId || '');
+  if (!shop || !isKnownTheme(themeId)) return res.status(400).json({ error: 'اختر متجرًا وثيمًا صالحين' });
+  const state = sanitizeShopThemeState(shop.themeSystem, shop.theme);
+  state.draft = { themeId, overrides: {} }; shop.themeSystem = state; await saveDb();
+  res.json({ ok: true, requiresPublish: true });
+});
+app.post('/api/admin/theme-builder/restore', requireLogin, requireAdmin, async (req, res) => {
+  const target = String(req.body?.target || 'default'), data = adminThemeTarget(target, String(req.body?.shopId || ''));
+  const index = Number(req.body?.index);
+  const version = data?.versions?.[index];
+  if (!data || !version) return res.status(404).json({ error: 'الإصدار غير موجود' });
+  if (data.kind === 'shop') data.shop.themeSystem.draft = version.revision;
+  else if (data.kind === 'theme') data.record.draft = version.config;
+  else data.record.draft = version.config;
+  await saveDb(); res.json({ ok: true });
+});
+app.delete('/api/admin/theme-builder/themes/:id', requireLogin, requireAdmin, async (req, res) => {
+  const id = req.params.id;
+  if (!/^theme-[a-f0-9]{12}$/.test(id)) return res.status(400).json({ error: 'لا يمكن حذف الثيم الافتراضي' });
+  if (db.shops.some((shop) => shop.themeSystem?.published?.themeId === id || shop.themeSystem?.draft?.themeId === id)) return res.status(409).json({ error: 'الثيم مستخدم لدى متجر؛ عيّن له ثيمًا آخر أولًا' });
+  const before = db.settings.themeSystem.themes.length;
+  db.settings.themeSystem.themes = db.settings.themeSystem.themes.filter((theme) => theme.id !== id);
+  if (before === db.settings.themeSystem.themes.length) return res.status(404).json({ error: 'الثيم غير موجود' });
+  await saveDb(); res.json({ ok: true });
+});
+app.post('/api/admin/themes', requireLogin, requireAdmin, (req, res) => res.status(410).json({ error: 'تم إيقاف محرر الثيمات القديم. استخدم محرر الثيمات المركزي.' }));
+app.patch('/api/admin/themes/:id', requireLogin, requireAdmin, (req, res) => res.status(410).json({ error: 'تم إيقاف محرر الثيمات القديم. استخدم محرر الثيمات المركزي.' }));
+app.delete('/api/admin/themes/:id', requireLogin, requireAdmin, (req, res) => res.status(410).json({ error: 'تم إيقاف محرر الثيمات القديم. استخدم محرر الثيمات المركزي.' }));
 app.get('/api/admin/settings', requireLogin, requireAdmin, (req, res) => {
   const admin = db.users.find((user) => user.id === req.session.user.id && user.role === 'admin');
-  res.json({ settings: { appName: db.settings.appName || 'نوى', adminDisplayName: db.settings.adminDisplayName || '', adminTheme: db.settings.adminTheme || 'studio', customThemes: publicThemeCatalog(), customFonts: publicFontCatalog(), branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '', twoFactorEnabled: Boolean(admin?.totpSecret) } });
+  res.json({ settings: { appName: db.settings.appName || 'نوى', adminDisplayName: db.settings.adminDisplayName || '', adminTheme: 'stap-default', customThemes: [], customFonts: publicFontCatalog(), branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: [], activeStyleId: '', twoFactorEnabled: Boolean(admin?.totpSecret) } });
 });
 app.post('/api/admin/fonts', requireLogin, requireAdmin, async (req, res) => {
   if (db.settings.customFonts.length >= 4) return res.status(400).json({ error: 'يمكن حفظ 4 خطوط مخصصة كحد أقصى؛ احذف خطًا غير مستخدم لإضافة آخر' });
@@ -556,8 +619,15 @@ app.post('/api/admin/fonts', requireLogin, requireAdmin, async (req, res) => {
 });
 app.delete('/api/admin/fonts/:id', requireLogin, requireAdmin, async (req, res) => {
   if (!customFontById(req.params.id)) return res.status(404).json({ error: 'الخط المخصص غير موجود' });
+  const replaceReferences = (value) => {
+    if (!value || typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value)) {
+      if (['bodyFont','headingFont','numberFont'].includes(key) && child === req.params.id) value[key] = 'system';
+      else replaceReferences(child);
+    }
+  };
+  replaceReferences(db.settings.themeSystem); for (const shop of db.shops) replaceReferences(shop.themeSystem);
   db.settings.customFonts = db.settings.customFonts.filter((font) => font.id !== req.params.id);
-  db.settings.customThemes = db.settings.customThemes.map((theme) => theme.font === req.params.id ? { ...theme, font: 'system', updatedAt: Date.now() } : theme);
   await saveDb();
   res.json({ customFonts: publicFontCatalog(), customThemes: publicThemeCatalog() });
 });
@@ -635,43 +705,23 @@ app.patch('/api/admin/settings', requireLogin, requireAdmin, async (req, res) =>
     }
     db.settings.branding = next;
   }
-  if (req.body?.stylePresets !== undefined) {
-    if (!Array.isArray(req.body.stylePresets) || req.body.stylePresets.length > 8) return res.status(400).json({ error: 'يمكن حفظ 8 ستايلات كحد أقصى' });
-    const styles = [];
-    let totalCssBytes = 0;
-    for (const raw of req.body.stylePresets) {
-      const name = cleanText(raw?.name, 40);
-      const css = typeof raw?.css === 'string' ? raw.css : '';
-      const id = typeof raw?.id === 'string' && /^[a-z0-9-]{1,40}$/.test(raw.id) ? raw.id : '';
-      if (!id || name.length < 2 || css.length > 12000 || /@import|url\s*\(|expression\s*\(|javascript\s*:|behavior\s*:|<\/style/i.test(css)) return res.status(400).json({ error: 'تحقق من اسم الستايل ومحتوى CSS؛ الروابط والاستيراد غير مسموحين' });
-      totalCssBytes += Buffer.byteLength(css, 'utf8');
-      if (totalCssBytes > 90000) return res.status(400).json({ error: 'إجمالي حجم ملفات الستايل يتجاوز 90KB' });
-      styles.push({ id, name, css });
-    }
-    if (new Set(styles.map((style) => style.id)).size !== styles.length) return res.status(400).json({ error: 'معرّف الستايل مكرر' });
-    const activeStyleId = typeof req.body.activeStyleId === 'string' ? req.body.activeStyleId : '';
-    if (activeStyleId && !styles.some((style) => style.id === activeStyleId)) return res.status(400).json({ error: 'الستايل النشط غير موجود' });
-    db.settings.stylePresets = styles;
-    db.settings.activeStyleId = activeStyleId;
-  }
+  if (req.body?.stylePresets !== undefined || req.body?.activeStyleId !== undefined) return res.status(410).json({ error: 'تم إيقاف ستايلات CSS القديمة. استخدم محرر الثيمات الآمن.' });
   await saveDb();
-  res.json({ settings: { appName, adminDisplayName: db.settings.adminDisplayName || '', adminTheme: db.settings.adminTheme || 'studio', customThemes: publicThemeCatalog(), customFonts: publicFontCatalog(), branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: db.settings.stylePresets || [], activeStyleId: db.settings.activeStyleId || '' } });
+  res.json({ settings: { appName, adminDisplayName: db.settings.adminDisplayName || '', adminTheme: 'stap-default', customThemes: [], customFonts: publicFontCatalog(), branding: publicBranding(), textOverrides: db.settings.textOverrides || {}, stylePresets: [], activeStyleId: '' } });
 });
 app.post('/api/admin/shops', requireLogin, requireAdmin, async (req, res) => {
   const name = cleanText(req.body?.name, 70);
   const username = cleanText(req.body?.username, 40);
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
   const reviewUrl = req.body?.reviewUrl ? googleUrl(req.body.reviewUrl) : '';
-  const theme = req.body?.theme === undefined ? 'studio' : isKnownTheme(req.body.theme) ? req.body.theme : null;
+  const theme = req.body?.theme === undefined ? 'stap-default' : isKnownTheme(req.body.theme) ? req.body.theme : null;
   const orderMode = ['catalog','custom'].includes(req.body?.orderMode) ? req.body.orderMode : 'catalog';
   const subscriptionEndDate = req.body?.subscriptionEndDate;
   if (name.length < 2 || !/^[A-Za-z0-9_.-]{3,40}$/.test(username) || !validPassword(password) || !validSubscriptionDate(subscriptionEndDate) || !theme) return res.status(400).json({ error: 'تحقق من بيانات المتجر والثيم المحدد وتاريخ انتهاء الاشتراك' });
   if (db.shops.some((s) => s.username === username) || db.users.some((u) => u.username === username)) return res.status(409).json({ error: 'اسم المستخدم مستخدم من قبل' });
   if (req.body?.reviewUrl && !reviewUrl) return res.status(400).json({ error: 'أدخل رابط Google Maps آمن يبدأ بـ HTTPS' });
-  const customCss = req.body?.customCss === undefined ? { store: '', card: '', screen: '' } : sanitizeShopCssSet(req.body.customCss);
-  if (!customCss) return res.status(400).json({ error: 'تحقق من CSS: استخدم محددات داخل مساحة المتجر أو بطاقة العميل أو شاشة البانر، دون روابط أو قواعد عامة.' });
   const slug = `${username.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-${crypto.randomBytes(2).toString('hex')}`;
-  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, subscriptionEndDate, reviewUrl, theme, orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', bannerImage: safeImage(req.body?.bannerImage), iconImage: safeImage(req.body?.iconImage), visibleSections: Array.isArray(req.body?.visibleSections) ? req.body.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections], chatEnabled: req.body?.chatEnabled !== false, customCssEnabled: req.body?.customCssEnabled !== false, customCss, createdAt: new Date().toISOString() };
+  const shop = { id: crypto.randomUUID(), slug, name, username, passwordHash: hashPassword(password), active: true, subscriptionEndDate, reviewUrl, theme, themeSystem: sanitizeShopThemeState(null, theme), orderMode, items: [], bannerText: cleanText(req.body?.bannerText, 90) || 'أهلاً بك — اطلب واستمتع', bannerImage: safeImage(req.body?.bannerImage), iconImage: safeImage(req.body?.iconImage), visibleSections: Array.isArray(req.body?.visibleSections) ? req.body.visibleSections.filter((section) => allShopSections.includes(section)) : [...allShopSections], chatEnabled: req.body?.chatEnabled !== false, createdAt: new Date().toISOString() };
   if ((req.body?.bannerImage && !shop.bannerImage) || (req.body?.iconImage && !shop.iconImage)) return res.status(400).json({ error: 'الصورة غير صالحة أو أكبر من الحد المسموح' });
   db.shops.push(shop); await saveDb(); res.status(201).json({ shop: safeShop(shop) });
 });
@@ -707,15 +757,6 @@ app.patch('/api/admin/shops/:id', requireLogin, requireAdmin, async (req, res) =
   if (req.body?.chatEnabled !== undefined) {
     if (typeof req.body.chatEnabled !== 'boolean') return res.status(400).json({ error: 'حالة تواصل المتجر غير صالحة' });
     shop.chatEnabled = req.body.chatEnabled;
-  }
-  if (req.body?.customCss !== undefined) {
-    const customCss = sanitizeShopCssSet(req.body.customCss);
-    if (!customCss) return res.status(400).json({ error: 'تحقق من CSS: استخدم محددات داخل مساحة المتجر أو بطاقة العميل أو شاشة البانر، دون روابط أو قواعد عامة.' });
-    shop.customCss = customCss;
-  }
-  if (req.body?.customCssEnabled !== undefined) {
-    if (typeof req.body.customCssEnabled !== 'boolean') return res.status(400).json({ error: 'حالة CSS المخصص غير صالحة' });
-    shop.customCssEnabled = req.body.customCssEnabled;
   }
   if (req.body?.visibleSections !== undefined) {
     if (!Array.isArray(req.body.visibleSections) || req.body.visibleSections.some((section) => !allShopSections.includes(section))) return res.status(400).json({ error: 'قائمة أقسام المتجر غير صالحة' });
@@ -785,7 +826,7 @@ app.delete('/api/admin/shops/:id/items/:itemId', requireLogin, requireAdmin, (re
 });
 
 app.get('/api/shop/orders', requireLogin, requireShop, (req, res) => res.json({ orders: db.orders.filter((o) => o.shopId === req.shop.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(safeOrder) }));
-app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, customThemes: publicThemeCatalog(), customFonts: publicFontCatalog(), orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), visibleSections: shopSections(req.shop), chatEnabled: req.shop.chatEnabled !== false, subscriptionEndDate: validSubscriptionDate(req.shop.subscriptionEndDate) ? req.shop.subscriptionEndDate : '', subscriptionDaysRemaining: subscriptionDaysRemaining(req.shop) } }));
+app.get('/api/shop/config', requireLogin, requireShop, (req, res) => res.json({ shop: { slug: req.shop.slug, name: req.shop.name, theme: req.shop.theme, themeData: resolveThemeData(req.shop), customThemes: publicThemeCatalog(), customFonts: publicFontCatalog(), orderMode: req.shop.orderMode || 'catalog', bannerText: req.shop.bannerText, iconImage: safeImage(req.shop.iconImage), visibleSections: shopSections(req.shop), chatEnabled: req.shop.chatEnabled !== false, subscriptionEndDate: validSubscriptionDate(req.shop.subscriptionEndDate) ? req.shop.subscriptionEndDate : '', subscriptionDaysRemaining: subscriptionDaysRemaining(req.shop) } }));
 async function createOrderForShop(shop, body, res) {
   const customerName = cleanText(body?.customerName, 60);
   let item = '', items = [], prepMinutes = 0;
@@ -877,7 +918,7 @@ app.get('/api/public/orders/:id', async (req, res) => {
   if (!order) return res.status(404).json({ error: 'الطلب غير موجود' });
   if (!order.scanned) return res.status(403).json({ error: 'امسح رمز الطلب المعروض على شاشة المتجر لعرض بطاقة الحالة' });
   const shop = db.shops.find((s) => s.id === order.shopId);
-  const publicShop={ name: shop?.name || '', bannerText: shop?.bannerText || '', reviewUrl: order.status === 'completed' ? shop?.reviewUrl || '' : '', theme: shop?.theme || 'studio', customTheme: customThemeById(shop?.theme) };
+  const publicShop={ name: shop?.name || '', bannerText: shop?.bannerText || '', reviewUrl: order.status === 'completed' ? shop?.reviewUrl || '' : '', theme: shop?.theme || 'stap-default', themeData: shop ? resolveThemeData(shop, 'customerCard') : null };
   if(req.query.design==='1')Object.assign(publicShop,{slug:shop?.slug||'',bannerImage:safeImage(shop?.bannerImage),iconImage:safeImage(shop?.iconImage)});
   res.json({ order: { id: order.id, number: order.number, customerName: order.customerName || '', item: order.item, items: order.items || [], prepMinutes: order.prepMinutes || 0, status: order.status, statusLabel: statusLabels[order.status], updatedAt: order.updatedAt }, shop: publicShop });
 });
