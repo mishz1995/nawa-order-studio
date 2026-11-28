@@ -913,6 +913,18 @@ app.patch('/api/shop/settings', requireLogin, requireShop, async (req, res) => {
 });
 
 app.get('/api/public/push-key', (req, res) => res.json({ key: pushReady ? vapidPublicKey : '' }));
+app.get('/api/public/orders/:id/artwork', (req, res) => {
+  const order = db.orders.find((item) => item.id === req.params.id && item.scanned);
+  if (!order) return res.sendStatus(404);
+  const shop = db.shops.find((item) => item.id === order.shopId);
+  const image = safeImage(shop?.iconImage);
+  const match = image.match(/^data:image\/(webp|png|jpeg);base64,([A-Za-z0-9+/=]+)$/);
+  if (!match) return res.redirect(302, '/assets/stap/app-icon-light.svg');
+  res.setHeader('Content-Type', `image/${match[1]}`);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.send(Buffer.from(match[2], 'base64'));
+});
 app.get('/api/public/orders/:id', async (req, res) => {
   const order = db.orders.find((o) => o.id === req.params.id);
   if (!order) return res.status(404).json({ error: 'الطلب غير موجود' });
